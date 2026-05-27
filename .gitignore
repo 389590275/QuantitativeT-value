@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+data/
+node_modules/
+frontend/dist/
+frontend/dist-electron/
+frontend/release/
+.idea/
+*.db
