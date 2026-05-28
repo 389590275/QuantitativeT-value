@@ -8,6 +8,7 @@ import {
   apiRefreshCache,
   apiSetSymbol,
   apiSetTradeDate,
+  apiShiftTradeDate,
   useRealtime,
 } from "./hooks/useRealtime";
 import "./App.css";
@@ -63,10 +64,24 @@ export default function App() {
     }
   };
 
-  const handleSetTradeDate = async () => {
+  const handleSetTradeDate = async (nextTradeDate = tradeDate) => {
+    if (!nextTradeDate) return;
     setDateLoading(true);
     try {
-      await apiSetTradeDate(tradeDate);
+      await apiSetTradeDate(nextTradeDate);
+    } finally {
+      setDateLoading(false);
+    }
+  };
+
+  const handleAdjustTradeDate = async (days: number) => {
+    if (!tradeDate || dateLoading) return;
+    setDateLoading(true);
+    try {
+      const result = await apiShiftTradeDate(days, tradeDate);
+      if (result?.trade_date) {
+        setTradeDate(result.trade_date);
+      }
     } finally {
       setDateLoading(false);
     }
@@ -110,8 +125,22 @@ export default function App() {
           onChange={(e) => setTradeDate(e.target.value)}
         />
         <button
+          className="secondary date-step"
+          onClick={() => handleAdjustTradeDate(-1)}
+          disabled={dateLoading || !tradeDate}
+        >
+          前一天
+        </button>
+        <button
+          className="secondary date-step"
+          onClick={() => handleAdjustTradeDate(1)}
+          disabled={dateLoading || !tradeDate}
+        >
+          后一天
+        </button>
+        <button
           className="secondary"
-          onClick={handleSetTradeDate}
+          onClick={() => handleSetTradeDate()}
           disabled={dateLoading || !tradeDate}
         >
           {dateLoading ? "加载中…" : "切换交易日"}

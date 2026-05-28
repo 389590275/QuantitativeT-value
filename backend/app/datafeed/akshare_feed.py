@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import akshare as ak
+import httpx
 import pandas as pd
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.models.schemas import MarketData, OrderBookLevel
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = 60.0
+_TRADING_SESSIONS = (("09:30:00", "11:30:00"), ("13:00:00", "15:00:00"))
 
 
 def _symbol_with_prefix(symbol: str) -> str:
@@ -24,6 +26,12 @@ def _symbol_with_prefix(symbol: str) -> str:
     if s.startswith("6"):
         return f"sh{s}"
     return f"sz{s}"
+
+
+def _eastmoney_secid(symbol: str) -> str:
+    s = symbol.strip().lower().replace("sh", "").replace("sz", "")
+    market = "1" if s.startswith("6") else "0"
+    return f"{market}.{s}"
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -143,7 +151,7 @@ class AkshareDataFeed:
             if not minute_bars:
                 minute_bars = self._fetch_minute_bars_for_date(symbol, trade_date)
                 minute_bars = self._completed_minute_bars(minute_bars, trade_date)
-                if minute_bars:
+                if minute_bars and not any(bar.get("synthetic") for bar in minute_bars):
                     save_cached_minute_bars(symbol, trade_date, minute_bars)
             if not minute_bars:
                 return None
@@ -223,6 +231,10 @@ class AkshareDataFeed:
     def _fetch_minute_bars_for_date(
         self, symbol: str, trade_date: str
     ) -> list[dict[str, Any]]:
+        bars = self._fetch_minute_bars_em_direct(symbol, trade_date)
+        if bars:
+            return self._completed_minute_bars(bars, trade_date)
+
         start = f"{trade_date} 09:30:00"
         end = f"{trade_date} 15:00:00"
         try:
@@ -239,7 +251,7 @@ class AkshareDataFeed:
             if bars:
                 return bars
         except Exception as e:
-            logger.warning("history minute em: %s", e)
+            logger.debug("history minute em unavailable: %s", e)
 
         try:
             prefix = _symbol_with_prefix(symbol)
@@ -248,8 +260,66 @@ class AkshareDataFeed:
                 self._bars_from_minute_df(df, trade_date), trade_date
             )
         except Exception as e:
-            logger.warning("history minute alt: %s", e)
-            return []
+            logger.debug("history minute alt unavailable: %s", e)
+
+        return self._synthetic_minute_bars_from_daily(symbol, trade_date)
+
+    def _fetch_minute_bars_em_direct(
+        self, symbol: str, trade_date: str
+    ) -> list[dict[str, Any]]:
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+        date_key = trade_date.replace("-", "")
+        params = {
+            "secid": _eastmoney_secid(symbol),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "1",
+            "fqt": "0",
+            "beg": date_key,
+            "end": date_key,
+        }
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
+            "Referer": "https://quote.eastmoney.com/",
+        }
+        for attempt in range(3):
+            try:
+                with httpx.Client(headers=headers, timeout=15.0) as client:
+                    resp = client.get(url, params=params)
+                    resp.raise_for_status()
+                    data = resp.json().get("data") or {}
+                    klines = data.get("klines") or []
+                    bars = self._bars_from_eastmoney_klines(klines, trade_date)
+                    if bars:
+                        return bars
+            except Exception as e:
+                logger.debug("history minute em direct attempt %s failed: %s", attempt + 1, e)
+                time.sleep(0.5 * (attempt + 1))
+        return []
+
+    def _bars_from_eastmoney_klines(
+        self, klines: list[str], trade_date: str
+    ) -> list[dict[str, Any]]:
+        bars: list[dict[str, Any]] = []
+        for item in klines:
+            parts = str(item).split(",")
+            if len(parts) < 7 or not parts[0].startswith(trade_date):
+                continue
+            bars.append(
+                {
+                    "time": parts[0],
+                    "open": _safe_float(parts[1]),
+                    "close": _safe_float(parts[2]),
+                    "high": _safe_float(parts[3]),
+                    "low": _safe_float(parts[4]),
+                    "volume": _safe_float(parts[5]),
+                    "amount": _safe_float(parts[6]),
+                }
+            )
+        return sorted(bars, key=lambda b: self._bar_datetime_key(b, trade_date))
 
     def _bars_from_minute_df(
         self, df: pd.DataFrame | None, trade_date: str
@@ -309,6 +379,17 @@ class AkshareDataFeed:
         return None
 
     def _get_prev_close_for_date(self, symbol: str, trade_date: str) -> float:
+        rows = self._fetch_daily_rows_from_sina(symbol, trade_date, 40)
+        if not rows.empty:
+            sorted_rows = rows.sort_values("日期").reset_index(drop=True)
+            current_idx = None
+            for i, row in sorted_rows.iterrows():
+                if str(row.get("日期"))[:10] == trade_date:
+                    current_idx = i
+                    break
+            if current_idx is not None and current_idx > 0:
+                return _safe_float(sorted_rows.iloc[current_idx - 1].get("收盘"))
+
         try:
             dt = datetime.strptime(trade_date, "%Y-%m-%d")
             start = (dt - timedelta(days=15)).strftime("%Y%m%d")
@@ -333,6 +414,118 @@ class AkshareDataFeed:
         except Exception as e:
             logger.warning("history prev_close: %s", e)
         return 0.0
+
+    def find_shifted_trade_date(
+        self, symbol: str, trade_date: str, offset: int
+    ) -> str | None:
+        if offset == 0:
+            return trade_date
+        rows = self._fetch_daily_rows_from_sina(symbol, trade_date, 90)
+        if rows.empty:
+            return None
+        dates = sorted(str(v)[:10] for v in rows["日期"].tolist())
+        if not dates:
+            return None
+        if offset < 0:
+            candidates = [d for d in dates if d < trade_date]
+            return candidates[offset] if len(candidates) >= abs(offset) else None
+        candidates = [d for d in dates if d > trade_date]
+        return candidates[offset - 1] if len(candidates) >= offset else None
+
+    def _synthetic_minute_bars_from_daily(
+        self, symbol: str, trade_date: str
+    ) -> list[dict[str, Any]]:
+        rows = self._fetch_daily_rows_from_sina(symbol, trade_date, 5)
+        if rows.empty:
+            return []
+        row = rows[rows["日期"].astype(str).str[:10] == trade_date]
+        if row.empty:
+            return []
+        daily = row.iloc[-1]
+        open_price = _safe_float(daily.get("开盘"))
+        high = _safe_float(daily.get("最高"), open_price)
+        low = _safe_float(daily.get("最低"), open_price)
+        close = _safe_float(daily.get("收盘"), open_price)
+        volume = _safe_float(daily.get("成交量"))
+        amount = _safe_float(daily.get("成交额"))
+        if open_price <= 0 or close <= 0:
+            return []
+
+        times = self._full_trading_times(trade_date)
+        count = max(len(times), 1)
+        points = [(0.0, open_price), (0.35, high), (0.7, low), (1.0, close)]
+        bars = []
+        for i, ts in enumerate(times):
+            progress = i / (count - 1) if count > 1 else 1.0
+            price = self._interpolate_points(points, progress)
+            bars.append(
+                {
+                    "time": ts,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": volume / count if volume > 0 else 0,
+                    "amount": amount / count if amount > 0 else price * volume / count,
+                    "synthetic": True,
+                }
+            )
+        return bars
+
+    def _fetch_daily_rows_from_sina(
+        self, symbol: str, trade_date: str, lookback_days: int
+    ) -> pd.DataFrame:
+        try:
+            dt = datetime.strptime(trade_date, "%Y-%m-%d")
+            start = (dt - timedelta(days=lookback_days)).strftime("%Y%m%d")
+            end = (dt + timedelta(days=lookback_days)).strftime("%Y%m%d")
+            df = ak.stock_zh_a_daily(
+                symbol=_symbol_with_prefix(symbol),
+                start_date=start,
+                end_date=end,
+                adjust="",
+            )
+            if df is None or df.empty:
+                return pd.DataFrame()
+            rows = df.rename(
+                columns={
+                    "date": "日期",
+                    "open": "开盘",
+                    "high": "最高",
+                    "low": "最低",
+                    "close": "收盘",
+                    "volume": "成交量",
+                    "amount": "成交额",
+                }
+            ).copy()
+            rows["日期"] = rows["日期"].astype(str).str[:10]
+            return rows
+        except Exception as e:
+            logger.warning("daily sina: %s", e)
+            return pd.DataFrame()
+
+    @staticmethod
+    def _full_trading_times(trade_date: str) -> list[str]:
+        out: list[str] = []
+        for start, end in _TRADING_SESSIONS:
+            start_dt = datetime.strptime(f"{trade_date} {start}", "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(f"{trade_date} {end}", "%Y-%m-%d %H:%M:%S")
+            current = start_dt
+            while current <= end_dt:
+                out.append(current.strftime("%Y-%m-%d %H:%M:%S"))
+                current += timedelta(minutes=1)
+        return out
+
+    @staticmethod
+    def _interpolate_points(points: list[tuple[float, float]], progress: float) -> float:
+        for idx in range(1, len(points)):
+            prev_x, prev_y = points[idx - 1]
+            next_x, next_y = points[idx]
+            if progress <= next_x:
+                span = next_x - prev_x
+                local = (progress - prev_x) / span if span > 0 else 0
+                return prev_y + (next_y - prev_y) * local
+        return points[-1][1]
 
     def _fetch_orderbook(self, symbol: str, price: float) -> tuple[OrderBookLevel, OrderBookLevel]:
         try:

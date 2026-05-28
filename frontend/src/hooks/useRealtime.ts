@@ -101,6 +101,15 @@ export async function apiSetTradeDate(tradeDate: string) {
   return res.json();
 }
 
+export async function apiShiftTradeDate(offset: number, tradeDate: string) {
+  const res = await fetch("/api/trade-date/shift", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ offset, trade_date: tradeDate }),
+  });
+  return res.json();
+}
+
 export async function apiStart() {
   await fetch("/api/start", { method: "POST" });
 }

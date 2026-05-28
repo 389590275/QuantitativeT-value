@@ -20,6 +20,11 @@ body {
   color: var(--text);
 }
 
+button,
+input {
+  font: inherit;
+}
+
 .app {
   min-height: 100vh;
   padding: 16px 24px 32px;
@@ -54,6 +59,7 @@ body {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin: 16px 0;
 }
@@ -78,6 +84,7 @@ body {
   background: var(--accent);
   color: white;
   cursor: pointer;
+  min-height: 38px;
 }
 
 .toolbar button.secondary {
@@ -89,6 +96,11 @@ body {
 .toolbar button.secondary:hover:not(:disabled) {
   border-color: #60a5fa;
   color: #e2e8f0;
+}
+
+.toolbar button.date-step {
+  padding-left: 12px;
+  padding-right: 12px;
 }
 
 .toolbar button:disabled {
@@ -200,6 +212,7 @@ body {
   background: var(--panel);
   border-radius: 12px;
   padding: 16px 20px;
+  overflow-x: auto;
 }
 
 .panel h3 {
@@ -420,5 +433,132 @@ body {
   .hero,
   .grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 12px 12px 24px;
+  }
+
+  .header {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .header h1 {
+    font-size: 1.2rem;
+  }
+
+  .conn {
+    flex: 0 0 auto;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .toolbar input,
+  .toolbar input.date-input,
+  .toolbar button {
+    width: 100%;
+  }
+
+  .toolbar input {
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  .toolbar button {
+    padding: 8px 10px;
+    min-height: 40px;
+  }
+
+  .hero {
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .stock-info h2 {
+    font-size: 1.15rem;
+  }
+
+  .price-row {
+    gap: 10px;
+  }
+
+  .price {
+    font-size: 2rem;
+  }
+
+  .signal-card,
+  .panel {
+    border-radius: 10px;
+    padding: 14px;
+  }
+
+  .signal-value {
+    font-size: 1.7rem;
+  }
+
+  .grid,
+  .side-column {
+    gap: 12px;
+  }
+
+  .chart-header,
+  .trade-list-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chart-badges {
+    justify-content: flex-start;
+  }
+
+  .factor-panel table,
+  .trade-list table {
+    min-width: 420px;
+    font-size: 0.85rem;
+  }
+
+  .factor-panel th,
+  .factor-panel td,
+  .trade-list th,
+  .trade-list td {
+    padding: 7px 5px;
+  }
+
+  .chart-tooltip {
+    min-width: 0;
+    max-width: calc(100vw - 48px);
+    font-size: 0.78rem;
+  }
+
+  .tooltip-row {
+    gap: 10px;
+  }
+
+  .footer {
+    margin-top: 18px;
+    line-height: 1.6;
+  }
+}
+
+@media (max-width: 420px) {
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .price-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .t0-pair,
+  .reasons {
+    line-height: 1.6;
   }
 }

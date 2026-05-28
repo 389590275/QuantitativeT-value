@@ -14,7 +14,7 @@ QuantitativeT-value/
 
 ## 环境要求
 
-- Python 3.10+
+- Python 3.9+
 - Node.js 18+
 
 ## 快速开始
@@ -96,10 +96,11 @@ npm run electron:dev
 2. 因子面板 10 项实时更新
 3. 满足规则时出现 BUY/SELL 并推送通知
 
+$body = @{
+  msgtype = "markdown"
+  markdown = @{
+    content = "### T0 测试`n买卖点通知通道正常"
+  }
+} | ConvertTo-Json -Depth 3
 
-git init
-git add .
-git commit -m "first commit"
-git branch -M main
-git remote add origin https://github.com/389590275/QuantitativeT-value.git
-git push -u origin main
+Invoke-RestMethod -Uri "https://work.weixin.qq.com/wework_admin/common/openBotProfile/24e5d2aecdb2f20851b8c7da81dd6e0461" -Method Post -Body $body -ContentType "application/json; charset=utf-8"

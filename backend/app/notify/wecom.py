@@ -24,7 +24,18 @@ async def send_wecom(
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, json=payload)
-            return resp.status_code == 200
+            if resp.status_code != 200:
+                logger.warning("wecom http %s: %s", resp.status_code, resp.text[:500])
+                return False
+            try:
+                body = resp.json()
+            except Exception:
+                return True
+            # 企业微信：errcode=0 表示成功
+            if isinstance(body, dict) and body.get("errcode", 0) != 0:
+                logger.warning("wecom api err: %s", body)
+                return False
+            return True
     except Exception as e:
         logger.warning("wecom send failed: %s", e)
         return False

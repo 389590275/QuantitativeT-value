@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from app.core.config import settings
 from app.datafeed.akshare_feed import AkshareDataFeed
@@ -39,6 +39,8 @@ class TradingEngine:
         self._tick_history: list[dict] = []
         self._factor_snapshots: dict[str, dict] = {}
         self._latest: RealtimePayload | None = None
+        self._last_offhours_replay_at: datetime | None = None
+        self._last_offhours_payload_key: tuple[str, str, int] | None = None
         self._calc_lock = threading.RLock()
         self._restore_t0_state()
 
@@ -62,6 +64,9 @@ class TradingEngine:
         self.symbol = symbol.strip()
         self._tick_history.clear()
         self._factor_snapshots.clear()
+        self._latest = None
+        self._last_offhours_replay_at = None
+        self._last_offhours_payload_key = None
         self._restore_t0_state()
         name = await asyncio.to_thread(self.datafeed.get_stock_name, self.symbol)
         if self.trade_date != self._today():
@@ -81,6 +86,27 @@ class TradingEngine:
             "sell_count": self.t0_pairer.sell_count,
             "t0_position": self.t0_pairer.position,
         }
+
+    async def shift_trade_date(self, offset: int, base_trade_date: str | None = None) -> dict:
+        date_key = base_trade_date or self.trade_date
+        next_trade_date = await asyncio.to_thread(
+            self.datafeed.find_shifted_trade_date,
+            self.symbol,
+            date_key,
+            offset,
+        )
+        if not next_trade_date:
+            return {
+                "symbol": self.symbol,
+                "trade_date": self.trade_date,
+                "replayed_points": 0,
+                "no_data": True,
+                "message": "未找到可切换的交易日",
+                "buy_count": self.t0_pairer.buy_count,
+                "sell_count": self.t0_pairer.sell_count,
+                "t0_position": self.t0_pairer.position,
+            }
+        return await self.load_trade_date(next_trade_date)
 
     async def clear_and_recalculate(self, trade_date: str | None = None) -> dict:
         date_key = trade_date or self.trade_date
@@ -188,6 +214,12 @@ class TradingEngine:
             raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
                 factors, price
             )
+            if bar.get("synthetic"):
+                raw_signal = SignalOutput(
+                    signal="HOLD",
+                    score=50.0,
+                    reasons=["分钟数据源不可用，使用日线估算分时展示"],
+                )
             decision = self.t0_pairer.apply(raw_signal, price, time_key, replay_md.timestamp)
             latest_signal = decision.display_signal
             latest_factors = {k: v.value for k, v in factors.items()}
@@ -297,8 +329,18 @@ class TradingEngine:
         if self.trade_date != self._today():
             return
         md = self.datafeed.fetch_quote(self.symbol)
-        if md is None or self._loop is None:
+        if md is None:
+            self._publish_offhours_snapshot_locked()
             return
+        if self._loop is None:
+            return
+
+        if self._latest and self._latest.trade_date != self.trade_date:
+            self._tick_history.clear()
+            self._factor_snapshots.clear()
+            self._restore_t0_state(self.trade_date)
+        self._last_offhours_replay_at = None
+        self._last_offhours_payload_key = None
 
         self._tick_history.append(
             {"price": md.price, "time": md.timestamp.isoformat()}
@@ -397,6 +439,61 @@ class TradingEngine:
 
         asyncio.run_coroutine_threadsafe(
             self._post_tick(payload, has_notification), self._loop
+        )
+
+    def _publish_offhours_snapshot_locked(self) -> None:
+        if self._loop is None:
+            return
+
+        now = datetime.now()
+        if self._is_trading_time(now):
+            return
+
+        needs_history = (
+            self._latest is None
+            or self._latest.symbol != self.symbol
+            or not self._latest.minute_points
+            or (self._latest.trade_date != self.trade_date and now.weekday() < 5)
+        )
+        can_retry = (
+            self._last_offhours_replay_at is None
+            or (now - self._last_offhours_replay_at).total_seconds() >= 60
+        )
+        if needs_history and can_retry:
+            self._last_offhours_replay_at = now
+            self._load_latest_available_history_locked(now)
+
+        if self._latest is None:
+            return
+
+        payload_key = (
+            self._latest.symbol,
+            self._latest.trade_date,
+            len(self._latest.minute_points),
+        )
+        if payload_key == self._last_offhours_payload_key:
+            return
+
+        self._last_offhours_payload_key = payload_key
+        asyncio.run_coroutine_threadsafe(
+            self._post_tick(self._latest, False), self._loop
+        )
+
+    def _load_latest_available_history_locked(self, now: datetime) -> None:
+        original_trade_date = self.trade_date
+        for days_back in range(0, 16):
+            candidate = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+            self._tick_history.clear()
+            self._factor_snapshots.clear()
+            self._latest = None
+            if self._recalculate_history_locked(candidate, False) > 0:
+                return
+
+        self._tick_history.clear()
+        self._factor_snapshots.clear()
+        self._latest = self._empty_payload(
+            original_trade_date,
+            "非交易时段未获取到最近可用分钟数据",
         )
 
     def _persist_signal(self, md, signal: SignalOutput, price: float | None = None) -> None:
