@@ -74,17 +74,19 @@ class TradingEngine:
         return {"symbol": self.symbol, "name": name}
 
     async def load_trade_date(self, trade_date: str) -> dict:
-        self.trade_date = trade_date
-        replayed = await asyncio.to_thread(self._load_trade_date_sync, trade_date)
-        await self._broadcast(self._latest)
+        payload, replayed = await asyncio.to_thread(
+            self._preview_trade_date_sync, trade_date
+        )
+        await self._broadcast(payload)
         return {
             "symbol": self.symbol,
-            "trade_date": self.trade_date,
+            "trade_date": trade_date,
             "replayed_points": replayed,
             "no_data": replayed == 0,
-            "buy_count": self.t0_pairer.buy_count,
-            "sell_count": self.t0_pairer.sell_count,
-            "t0_position": self.t0_pairer.position,
+            "buy_count": payload.buy_count,
+            "sell_count": payload.sell_count,
+            "t0_position": payload.t0_position,
+            "latest": payload.model_dump(mode="json"),
         }
 
     async def shift_trade_date(self, offset: int, base_trade_date: str | None = None) -> dict:
@@ -98,7 +100,7 @@ class TradingEngine:
         if not next_trade_date:
             return {
                 "symbol": self.symbol,
-                "trade_date": self.trade_date,
+                "trade_date": date_key,
                 "replayed_points": 0,
                 "no_data": True,
                 "message": "未找到可切换的交易日",
@@ -164,6 +166,46 @@ class TradingEngine:
                 )
             return replayed
 
+    def _preview_trade_date_sync(self, trade_date: str) -> tuple[RealtimePayload, int]:
+        with self._calc_lock:
+            live_trade_date = self.trade_date
+            live_tick_history = list(self._tick_history)
+            live_factor_snapshots = dict(self._factor_snapshots)
+            live_latest = self._latest
+            live_pairer_state = (
+                self.t0_pairer._trade_date,
+                self.t0_pairer._position,
+                list(self.t0_pairer._marks),
+                dict(self.t0_pairer._pending_buy) if self.t0_pairer._pending_buy else None,
+            )
+            try:
+                self._tick_history.clear()
+                self._factor_snapshots.clear()
+                self._latest = None
+                self.t0_pairer.reset_day(trade_date)
+                replayed = self._recalculate_history_locked(
+                    trade_date, False, persist=False
+                )
+                payload = self._latest or self._empty_payload(
+                    trade_date, "未获取到该交易日分钟数据，未计算买卖点"
+                )
+                return payload, replayed
+            finally:
+                (
+                    pairer_trade_date,
+                    pairer_position,
+                    pairer_marks,
+                    pairer_pending_buy,
+                ) = live_pairer_state
+                self.trade_date = live_trade_date
+                self._tick_history = live_tick_history
+                self._factor_snapshots = live_factor_snapshots
+                self._latest = live_latest
+                self.t0_pairer._trade_date = pairer_trade_date
+                self.t0_pairer._position = pairer_position
+                self.t0_pairer._marks = pairer_marks
+                self.t0_pairer._pending_buy = pairer_pending_buy
+
     def _clear_recalculate_sync(
         self, trade_date: str, refresh_cache: bool, no_data_reason: str
     ) -> tuple[dict, int]:
@@ -182,7 +224,9 @@ class TradingEngine:
         with self._calc_lock:
             return self._recalculate_history_locked(trade_date, refresh_cache)
 
-    def _recalculate_history_locked(self, trade_date: str, refresh_cache: bool = False) -> int:
+    def _recalculate_history_locked(
+        self, trade_date: str, refresh_cache: bool = False, persist: bool = True
+    ) -> int:
         md = self.datafeed.fetch_history_day(
             self.symbol, trade_date, refresh_cache=refresh_cache
         )
@@ -239,17 +283,18 @@ class TradingEngine:
                 "reasons": latest_signal.reasons,
             }
 
-            for persisted in decision.persist_signals or []:
-                self._persist_signal(
-                    replay_md,
-                    SignalOutput(
-                        signal=str(persisted["signal"]),
-                        score=float(persisted.get("score", latest_signal.score)),
-                        reasons=latest_signal.reasons,
-                    ),
-                    price=float(persisted.get("price", price)),
-                )
-            insert_tick(replay_md.symbol, replay_md.price, replay_md.volume, replay_md.timestamp)
+            if persist:
+                for persisted in decision.persist_signals or []:
+                    self._persist_signal(
+                        replay_md,
+                        SignalOutput(
+                            signal=str(persisted["signal"]),
+                            score=float(persisted.get("score", latest_signal.score)),
+                            reasons=latest_signal.reasons,
+                        ),
+                        price=float(persisted.get("price", price)),
+                    )
+                insert_tick(replay_md.symbol, replay_md.price, replay_md.volume, replay_md.timestamp)
 
         minute_points = [self._build_minute_point(b) for b in md.minute_bars]
         if not minute_points:
@@ -261,6 +306,7 @@ class TradingEngine:
             symbol=md.symbol,
             name=md.name,
             trade_date=trade_date,
+            quote_time=self._normalize_point_time(str(md.minute_bars[-1].get("time", ""))) or md.timestamp.strftime("%H:%M:%S"),
             price=md.price,
             change_pct=md.change_pct,
             signal=latest_signal.signal,
@@ -299,6 +345,7 @@ class TradingEngine:
             symbol=self.symbol,
             name=self.symbol,
             trade_date=trade_date,
+            quote_time="",
             signal="HOLD",
             score=50.0,
             reasons=[reason],
@@ -343,7 +390,9 @@ class TradingEngine:
         md = self.datafeed.fetch_quote(self.symbol)
         if md is None:
             if self._is_trading_time(datetime.now()):
-                self._publish_loading_payload_locked("行情加载中，暂不计算买卖点")
+                # 行情源短暂不可用时保留上一笔有效行情，不用 loading 覆盖前端。
+                # 没有新行情也不会计算或触发买卖点。
+                return
             else:
                 self._publish_offhours_snapshot_locked()
             return
@@ -441,6 +490,7 @@ class TradingEngine:
             symbol=md.symbol,
             name=md.name,
             trade_date=self.trade_date,
+            quote_time=self._normalize_point_time(bar_time or md.timestamp.strftime("%H:%M:%S")),
             price=md.price,
             change_pct=md.change_pct,
             signal=signal.signal,

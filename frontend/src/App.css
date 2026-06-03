@@ -154,6 +154,12 @@ input {
   font-size: 0.9rem;
 }
 
+.quote-time {
+  color: var(--muted);
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
 .signal-card {
   background: var(--panel);
   border-radius: 12px;

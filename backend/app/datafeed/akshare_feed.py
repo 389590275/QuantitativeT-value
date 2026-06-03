@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import Any
 
 import akshare as ak
 import pandas as pd
 
-from app.core.config import settings
 from app.models.database import get_cached_minute_bars, save_cached_minute_bars
 from app.models.schemas import MarketData, OrderBookLevel
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL = 60.0
 _TRADING_SESSIONS = (("09:30:00", "11:30:00"), ("13:00:00", "15:00:00"))
 
 
@@ -40,18 +37,6 @@ class AkshareDataFeed:
     def __init__(self) -> None:
         self._name_cache: dict[str, str] = {}
         self._prev_close_cache: dict[str, float] = {}
-        self._northbound_prev: float | None = None
-        self._aux_cache: dict[str, tuple[float, Any]] = {}
-
-    def _cached(self, key: str, fetcher) -> Any:
-        now = time.time()
-        if key in self._aux_cache:
-            ts, val = self._aux_cache[key]
-            if now - ts < _CACHE_TTL:
-                return val
-        val = fetcher()
-        self._aux_cache[key] = (now, val)
-        return val
 
     def get_stock_name(self, symbol: str) -> str:
         if symbol in self._name_cache:
@@ -66,22 +51,24 @@ class AkshareDataFeed:
             logger.warning("get_stock_name failed: %s", e)
         return symbol
 
-    def _get_prev_close(self, symbol: str) -> float:
+    def _get_prev_close(self, symbol: str, price: float = 0.0) -> float:
         if symbol in self._prev_close_cache:
-            return self._prev_close_cache[symbol]
+            cached = self._prev_close_cache[symbol]
+            if self._is_reasonable_prev_close(cached, price):
+                return cached
         try:
             df = ak.stock_individual_info_em(symbol=symbol)
             row = df[df["item"] == "昨收"]
             if not row.empty:
                 val = _safe_float(row.iloc[0]["value"])
-                if val > 0:
+                if self._is_reasonable_prev_close(val, price):
                     self._prev_close_cache[symbol] = val
                     return val
         except Exception as e:
             logger.warning("prev_close: %s", e)
 
         val = self._get_prev_close_from_daily(symbol)
-        if val > 0:
+        if self._is_reasonable_prev_close(val, price):
             self._prev_close_cache[symbol] = val
             return val
         return 0.0
@@ -100,19 +87,10 @@ class AkshareDataFeed:
             price = _safe_float(last.get("close"))
             volume = _safe_float(last.get("volume"))
             amount = _safe_float(last.get("amount"))
-            prev_close = self._get_prev_close(symbol)
+            prev_close = self._get_prev_close(symbol, price)
             change_pct = (price / prev_close - 1) * 100 if prev_close > 0 else None
 
-            bid1, ask1 = self._fetch_orderbook(symbol, price)
             vwap = self._calc_vwap(minute_bars, price, amount, volume)
-            index_hs300, index_cyb = self._cached(
-                "index", self._fetch_index_changes
-            )
-            northbound = self._cached("northbound", self._fetch_northbound)
-            sector_chg = self._cached(
-                f"etf_{settings.sector_etf}",
-                lambda: self._fetch_sector_etf_change(settings.sector_etf),
-            )
 
             highs = [_safe_float(b.get("high"), _safe_float(b.get("close"))) for b in minute_bars]
             lows = [_safe_float(b.get("low"), _safe_float(b.get("close"))) for b in minute_bars]
@@ -127,14 +105,8 @@ class AkshareDataFeed:
                 volume=volume,
                 amount=amount,
                 change_pct=change_pct,
-                bid1=bid1,
-                ask1=ask1,
                 minute_bars=minute_bars,
                 vwap=vwap,
-                index_hs300_change=index_hs300,
-                index_cyb_change=index_cyb,
-                northbound_net=northbound,
-                sector_etf_change=sector_chg,
                 timestamp=datetime.now(),
             )
         except Exception as e:
@@ -387,11 +359,19 @@ class AkshareDataFeed:
             if today_idx > 0:
                 return _safe_float(rows.iloc[today_idx - 1].get("收盘"))
 
-        if len(rows) >= 2:
-            return _safe_float(rows.iloc[-2].get("收盘"))
-        if len(rows) == 1 and str(rows.iloc[0].get("日期"))[:10] != today:
-            return _safe_float(rows.iloc[0].get("收盘"))
+        # 盘中日线接口通常还没有今天这一行，此时最后一行就是最近交易日收盘价。
+        if len(rows) >= 1 and str(rows.iloc[-1].get("日期"))[:10] != today:
+            return _safe_float(rows.iloc[-1].get("收盘"))
         return 0.0
+
+    @staticmethod
+    def _is_reasonable_prev_close(prev_close: float, price: float = 0.0) -> bool:
+        if prev_close <= 0:
+            return False
+        if price <= 0:
+            return True
+        ratio = price / prev_close
+        return 0.5 <= ratio <= 1.5
 
     def find_shifted_trade_date(
         self, symbol: str, trade_date: str, offset: int
@@ -505,27 +485,6 @@ class AkshareDataFeed:
                 return prev_y + (next_y - prev_y) * local
         return points[-1][1]
 
-    def _fetch_orderbook(self, symbol: str, price: float) -> tuple[OrderBookLevel, OrderBookLevel]:
-        try:
-            df = ak.stock_bid_ask_em(symbol=symbol)
-            if df is None or df.empty:
-                return OrderBookLevel(price=price), OrderBookLevel(price=price)
-            buy = df[df["item"] == "buy_1"] if "item" in df.columns else None
-            sell = df[df["item"] == "sell_1"] if "item" in df.columns else None
-            bid_vol, ask_vol = 0.0, 0.0
-            bid_price, ask_price = price, price
-            if buy is not None and not buy.empty:
-                bid_vol = _safe_float(buy.iloc[0].get("value", 0))
-            if sell is not None and not sell.empty:
-                ask_vol = _safe_float(sell.iloc[0].get("value", 0))
-            return (
-                OrderBookLevel(price=bid_price, volume=bid_vol),
-                OrderBookLevel(price=ask_price, volume=ask_vol),
-            )
-        except Exception as e:
-            logger.warning("orderbook: %s", e)
-            return OrderBookLevel(price=price), OrderBookLevel(price=price)
-
     def _calc_vwap(
         self, bars: list[dict], price: float, amount: float, volume: float
     ) -> float:
@@ -582,49 +541,3 @@ class AkshareDataFeed:
             enriched.append(item)
 
         return enriched
-
-    def _fetch_index_changes(self) -> tuple[float, float]:
-        hs300, cyb = 0.0, 0.0
-        try:
-            idx = ak.stock_zh_index_spot_em()
-            for code, attr in [("000300", "hs300"), ("399006", "cyb")]:
-                row = idx[idx["代码"] == code]
-                if not row.empty:
-                    val = _safe_float(row.iloc[0].get("涨跌幅"))
-                    if attr == "hs300":
-                        hs300 = val
-                    else:
-                        cyb = val
-        except Exception as e:
-            logger.warning("index: %s", e)
-        return hs300, cyb
-
-    def _fetch_northbound(self) -> float:
-        try:
-            df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
-            if df is None or df.empty:
-                return 0.0
-            col = "value" if "value" in df.columns else df.columns[-1]
-            net = _safe_float(df.iloc[-1][col])
-            delta = 0.0
-            if self._northbound_prev is not None:
-                delta = net - self._northbound_prev
-            self._northbound_prev = net
-            return delta
-        except Exception as e:
-            logger.warning("northbound: %s", e)
-            return 0.0
-
-    def _fetch_sector_etf_change(self, etf_code: str) -> float:
-        try:
-            df = ak.fund_etf_hist_em(
-                symbol=etf_code, period="daily", adjust=""
-            )
-            if df is not None and len(df) >= 2:
-                c0 = _safe_float(df.iloc[-2].get("收盘", 0))
-                c1 = _safe_float(df.iloc[-1].get("收盘", 0))
-                if c0 > 0:
-                    return (c1 / c0 - 1) * 100
-        except Exception as e:
-            logger.warning("sector etf: %s", e)
-        return 0.0

@@ -1,6 +1,6 @@
 # A股 T0 量化助手 MVP
 
-基于需求文档实现的最小可用版本：1 只股票、10 个核心因子、实时 WebSocket 推送、买卖信号、Windows 桌面通知、企业微信 Webhook。
+基于需求文档实现的最小可用版本：1 只股票、3 个核心因子、实时 WebSocket 推送、买卖信号、Windows 桌面通知、企业微信 Webhook。
 
 ## 项目结构
 
@@ -71,7 +71,7 @@ npm run electron:dev
 | 模块 | 说明 |
 |------|------|
 | 行情 | AkShare + 东方财富实时行情，约 1 秒轮询 |
-| 因子 | 10 个因子独立模块，统一 `BaseFactor` 接口 |
+| 因子 | 3 个当前启用因子：分时均线偏离、5分钟KDJ、MACD快慢线差 |
 | 信号 | BUY / SELL / WATCH / HOLD，评分 0–100 |
 | 通知 | 信号首次出现时：桌面通知 + 企微（去重） |
 | 存储 | SQLite 记录 `signals`、`ticks` |
@@ -93,7 +93,7 @@ npm run electron:dev
 ## MVP 验收
 
 1. 交易时段内价格约 1 秒刷新
-2. 因子面板 10 项实时更新
+2. 因子面板 3 项实时更新
 3. 满足规则时出现 BUY/SELL 并推送通知
 
 $body = @{

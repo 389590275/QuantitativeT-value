@@ -5,10 +5,8 @@ import { TradeList } from "./components/TradeList";
 import type { RealtimePayload } from "./types";
 import {
   apiClearRecalculate,
-  apiRefreshCache,
   apiSetSymbol,
   apiSetTradeDate,
-  apiShiftTradeDate,
   useRealtime,
 } from "./hooks/useRealtime";
 import "./App.css";
@@ -31,24 +29,35 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [dateLoading, setDateLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [previewData, setPreviewData] = useState<RealtimePayload | null>(null);
   const [stableChartData, setStableChartData] = useState<RealtimePayload | null>(null);
-  const isPreparingData = loading || dateLoading || clearing || refreshing;
-  const isDataLoading = data?.data_status === "loading";
-  const isSyntheticData = data?.data_status === "synthetic";
+  const isPreparingData = loading || dateLoading || clearing;
+  const isViewingToday = tradeDate === todayString();
+  const liveData = data?.trade_date === todayString() ? data : null;
+  const isLiveDataLoading = liveData?.data_status === "loading";
+  const liveDisplayData = isLiveDataLoading && stableChartData ? stableChartData : liveData ?? stableChartData;
+  const displayData = isViewingToday ? liveDisplayData : previewData;
+  const isDisplayDataLoading = displayData?.data_status === "loading";
+  const isSyntheticData = displayData?.data_status === "synthetic";
 
   useEffect(() => {
-    if ((data?.minute_points?.length ?? 0) > 0) {
+    if (data?.trade_date === todayString() && (data?.minute_points?.length ?? 0) > 0) {
       setStableChartData(data);
     }
   }, [data]);
 
-  const chartData = isDataLoading ? data : isPreparingData && stableChartData ? stableChartData : data;
+  const chartData = isPreparingData && isViewingToday && stableChartData ? stableChartData : displayData;
 
   const handleSetSymbol = async () => {
     setLoading(true);
     try {
       await apiSetSymbol(symbolInput.trim());
+      if (!isViewingToday) {
+        const result = await apiSetTradeDate(tradeDate);
+        setPreviewData(result?.latest ?? null);
+      } else {
+        setPreviewData(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -70,34 +79,26 @@ export default function App() {
     if (!nextTradeDate) return;
     setDateLoading(true);
     try {
-      await apiSetTradeDate(nextTradeDate);
-    } finally {
-      setDateLoading(false);
-    }
-  };
-
-  const handleAdjustTradeDate = async (days: number) => {
-    if (!tradeDate || dateLoading) return;
-    setDateLoading(true);
-    try {
-      const result = await apiShiftTradeDate(days, tradeDate);
-      if (result?.trade_date) {
-        setTradeDate(result.trade_date);
+      const result = await apiSetTradeDate(nextTradeDate);
+      if (nextTradeDate === todayString()) {
+        setPreviewData(null);
+      } else {
+        setPreviewData(result?.latest ?? null);
       }
     } finally {
       setDateLoading(false);
     }
   };
 
-  const handleRefreshCache = async () => {
-    if (!window.confirm(`确定刷新当前股票 ${tradeDate} 的行情缓存并重新计算吗？`)) {
-      return;
-    }
-    setRefreshing(true);
+  const handleToday = async () => {
+    const today = todayString();
+    setTradeDate(today);
+    setPreviewData(null);
+    setDateLoading(true);
     try {
-      await apiRefreshCache(tradeDate);
+      await apiSetTradeDate(today);
     } finally {
-      setRefreshing(false);
+      setDateLoading(false);
     }
   };
 
@@ -124,22 +125,11 @@ export default function App() {
           className="date-input"
           type="date"
           value={tradeDate}
-          onChange={(e) => setTradeDate(e.target.value)}
+          onChange={(e) => {
+            setTradeDate(e.target.value);
+            setPreviewData(null);
+          }}
         />
-        <button
-          className="secondary date-step"
-          onClick={() => handleAdjustTradeDate(-1)}
-          disabled={dateLoading || !tradeDate}
-        >
-          前一天
-        </button>
-        <button
-          className="secondary date-step"
-          onClick={() => handleAdjustTradeDate(1)}
-          disabled={dateLoading || !tradeDate}
-        >
-          后一天
-        </button>
         <button
           className="secondary"
           onClick={() => handleSetTradeDate()}
@@ -148,54 +138,55 @@ export default function App() {
           {dateLoading ? "加载中…" : "切换交易日"}
         </button>
         <button
-          className="secondary"
-          onClick={handleClearRecalculate}
-          disabled={clearing || refreshing || !tradeDate}
+          className="secondary date-step"
+          onClick={handleToday}
+          disabled={dateLoading}
         >
-          {clearing ? "清空中…" : "清空重新计算"}
+          今日
         </button>
         <button
           className="secondary"
-          onClick={handleRefreshCache}
-          disabled={refreshing || clearing || !tradeDate}
+          onClick={handleClearRecalculate}
+          disabled={clearing || !tradeDate}
         >
-          {refreshing ? "刷新中…" : "刷新行情缓存"}
+          {clearing ? "清空中…" : "重新计算"}
         </button>
       </section>
 
       <section className="hero">
         <div className="stock-info">
           <h2>
-            {data?.name || "—"} <span className="code">{data?.symbol || symbolInput}</span>
+            {displayData?.name || "—"} <span className="code">{displayData?.symbol || symbolInput}</span>
           </h2>
-          <p className="trade-date">交易日：{data?.trade_date || tradeDate}</p>
+          <p className="trade-date">交易日：{displayData?.trade_date || tradeDate}</p>
+          <p className="quote-time">行情时间：{displayData?.quote_time || "—"}</p>
           <div className="price-row">
-            <span className="price">{isDataLoading ? "加载中" : data?.price?.toFixed(2) ?? "—"}</span>
+            <span className="price">{isDisplayDataLoading ? "—" : displayData?.price?.toFixed(2) ?? "—"}</span>
             <span
               className={
-                (data?.change_pct ?? 0) >= 0 ? "change up" : "change down"
+                (displayData?.change_pct ?? 0) >= 0 ? "change up" : "change down"
               }
             >
-              {!isDataLoading && data?.change_pct != null
-                ? `${data.change_pct >= 0 ? "+" : ""}${data.change_pct.toFixed(2)}%`
+              {!isDisplayDataLoading && displayData?.change_pct != null
+                ? `${displayData.change_pct >= 0 ? "+" : ""}${displayData.change_pct.toFixed(2)}%`
                 : "—"}
             </span>
           </div>
           <p className="vwap">
-            VWAP: {isDataLoading ? "行情加载中" : data?.vwap?.toFixed(2) ?? "—"}
+            VWAP: {isDisplayDataLoading ? "—" : displayData?.vwap?.toFixed(2) ?? "—"}
             {isSyntheticData ? " · 分钟行情不可用，仅展示日线估算" : ""}
           </p>
           <p className="t0-pair">
-            已完成 T0：买 {data?.buy_count ?? 0} / 卖 {data?.sell_count ?? 0} ✓ 数量相等
-            {data?.pending_buy ? ` · 待卖出买点 ${data.pending_buy.price.toFixed(2)}` : ""}
+            已完成 T0：买 {displayData?.buy_count ?? 0} / 卖 {displayData?.sell_count ?? 0} ✓ 数量相等
+            {displayData?.pending_buy ? ` · 待卖出买点 ${displayData.pending_buy.price.toFixed(2)}` : ""}
           </p>
         </div>
-        <div className={`signal-card ${signalClass(data?.signal ?? "HOLD")}`}>
+        <div className={`signal-card ${signalClass(displayData?.signal ?? "HOLD")}`}>
           <div className="signal-label">当前信号</div>
-          <div className="signal-value">{isDataLoading ? "LOADING" : data?.signal ?? "HOLD"}</div>
-          <div className="signal-score">强度 {data?.score?.toFixed(0) ?? "—"}</div>
+          <div className="signal-value">{displayData?.signal ?? "HOLD"}</div>
+          <div className="signal-score">强度 {displayData?.score?.toFixed(0) ?? "—"}</div>
           <ul className="reasons">
-            {(data?.reasons ?? []).map((r) => (
+            {(displayData?.reasons ?? []).map((r) => (
               <li key={r}>{r}</li>
             ))}
           </ul>
@@ -205,8 +196,8 @@ export default function App() {
       <main className="grid">
         <IntradayChart data={chartData} loading={isPreparingData && Boolean(stableChartData)} />
         <div className="side-column">
-          <TradeList data={data} />
-          <FactorPanel data={data} />
+          <TradeList data={displayData} />
+          <FactorPanel data={displayData} />
         </div>
       </main>
 

@@ -142,18 +142,15 @@ class Kdj5mFactor(BaseFactor):
         prev2_j = prev2["j"]
 
         bottom_level = min(prev2_j, prev_j, j)
-        top_level = max(prev2_j, prev_j, j)
         bottom_zone = bottom_level <= self.bottom_threshold
-        top_zone = top_level >= self.top_threshold
 
         bottom_golden_cross = bottom_zone and prev_k <= prev_d and k > d
         bottom_turn_up = bottom_zone and j > prev_j and prev_j <= prev2_j
-        top_death_cross = top_zone and prev_k >= prev_d and k < d
-        top_turn_down = top_zone and j < prev_j and prev_j >= prev2_j
+        death_cross = prev_k >= prev_d and k < d
 
         if bottom_golden_cross or bottom_turn_up:
             status = "强"
-        elif top_death_cross or top_turn_down:
+        elif death_cross:
             status = "弱"
         else:
             status = "中性"
@@ -211,18 +208,15 @@ class MacdFastSlowFactor(BaseFactor):
         golden_cross = prev_dif <= prev_dea and dif > dea
         dif_turn_up = dif > prev_dif and prev_dif <= prev2_dif
 
-        # 零轴上方回落用于卖点侧判断。
+        # 零轴上方死叉用于卖点侧判断。
         death_cross = prev_dif >= prev_dea and dif < dea
-        dif_turn_down = dif < prev_dif and prev_dif >= prev2_dif
 
         if golden_cross and dif < 0:
             status = "强"
-        elif death_cross and dif > 0:
+        elif death_cross:
             status = "弱"
         elif dif_turn_up and dif < 0:
             status = "强"
-        elif dif_turn_down and dif > 0:
-            status = "弱"
         else:
             status = "中性"
 

@@ -85,7 +85,7 @@ class SignalEngine:
                 factor_scores["kdj_5m"] += KDJ_WEIGHT
             elif kdj5.status == "弱":
                 sell_points += 1
-                reasons.append("5分钟KDJ顶部死叉/拐头")
+                reasons.append("5分钟KDJ死叉")
                 short_score += KDJ_WEIGHT
                 factor_scores["kdj_5m"] -= KDJ_WEIGHT
 
@@ -97,7 +97,7 @@ class SignalEngine:
                 factor_scores["macd_fs"] += MACD_WEIGHT
             elif macd_fs.status == "弱":
                 sell_points += 1
-                reasons.append("MACD顶部死叉/拐头")
+                reasons.append("MACD死叉")
                 short_score += MACD_WEIGHT
                 factor_scores["macd_fs"] -= MACD_WEIGHT
 
@@ -110,7 +110,12 @@ class SignalEngine:
                 SignalOutput(signal="BUY", score=round(long_score, 1), reasons=reasons[:5]),
                 factor_scores,
             )
-        if sell_points >= 3 and short_score >= 75 and sell_ready:
+        if kdj5 and kdj5.status == "弱":
+            return (
+                SignalOutput(signal="SELL", score=round(100.0 - short_score, 1), reasons=reasons[:5]),
+                factor_scores,
+            )
+        if macd_fs and macd_fs.status == "弱":
             return (
                 SignalOutput(signal="SELL", score=round(100.0 - short_score, 1), reasons=reasons[:5]),
                 factor_scores,
