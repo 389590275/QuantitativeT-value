@@ -3,7 +3,7 @@ export interface RealtimePayload {
   name: string;
   trade_date?: string;
   price: number;
-  change_pct: number;
+  change_pct: number | null;
   signal: string;
   score: number;
   reasons: string[];
@@ -17,6 +17,7 @@ export interface RealtimePayload {
   t0_position?: "flat" | "long";
   buy_count?: number;
   sell_count?: number;
+  data_status?: "ok" | "loading" | "synthetic";
 }
 
 export interface MinutePoint {

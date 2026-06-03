@@ -199,6 +199,8 @@ class TradingEngine:
 
         for i, bar in enumerate(md.minute_bars):
             price = float(bar.get("close", 0) or 0)
+            if price <= 0:
+                continue
             time_key = self._normalize_point_time(str(bar.get("time", "")))
             partial_bars = md.minute_bars[: i + 1]
             replay_md = self._build_replay_market_data(md, partial_bars, bar, price)
@@ -210,15 +212,18 @@ class TradingEngine:
                 self._tick_history = self._tick_history[-100:]
             replay_md.tick_history = list(self._tick_history)
 
-            factors = self.factor_engine.run(replay_md)
-            raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
-                factors, price
-            )
-            if bar.get("synthetic"):
+            if self._market_data_is_synthetic(replay_md):
+                factors = {}
+                factor_scores = {}
                 raw_signal = SignalOutput(
                     signal="HOLD",
                     score=50.0,
                     reasons=["分钟数据源不可用，使用日线估算分时展示"],
+                )
+            else:
+                factors = self.factor_engine.run(replay_md)
+                raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
+                    factors, price
                 )
             decision = self.t0_pairer.apply(raw_signal, price, time_key, replay_md.timestamp)
             latest_signal = decision.display_signal
@@ -247,6 +252,11 @@ class TradingEngine:
             insert_tick(replay_md.symbol, replay_md.price, replay_md.volume, replay_md.timestamp)
 
         minute_points = [self._build_minute_point(b) for b in md.minute_bars]
+        if not minute_points:
+            self._latest = self._empty_payload(
+                trade_date, "未获取到有效行情数据，暂不计算买卖点"
+            )
+            return 0
         self._latest = RealtimePayload(
             symbol=md.symbol,
             name=md.name,
@@ -269,6 +279,7 @@ class TradingEngine:
             t0_position=self.t0_pairer.position,
             buy_count=self.t0_pairer.buy_count,
             sell_count=self.t0_pairer.sell_count,
+            data_status="synthetic" if self._market_data_is_synthetic(md) else "ok",
         )
         return len(md.minute_bars)
 
@@ -297,6 +308,7 @@ class TradingEngine:
             t0_position="flat",
             buy_count=0,
             sell_count=0,
+            data_status="loading",
         )
 
     async def start(self) -> None:
@@ -330,7 +342,10 @@ class TradingEngine:
             return
         md = self.datafeed.fetch_quote(self.symbol)
         if md is None:
-            self._publish_offhours_snapshot_locked()
+            if self._is_trading_time(datetime.now()):
+                self._publish_loading_payload_locked("行情加载中，暂不计算买卖点")
+            else:
+                self._publish_offhours_snapshot_locked()
             return
         if self._loop is None:
             return
@@ -349,10 +364,19 @@ class TradingEngine:
             self._tick_history = self._tick_history[-100:]
         md.tick_history = list(self._tick_history)
 
-        factors = self.factor_engine.run(md)
-        raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
-            factors, md.price
-        )
+        if self._market_data_is_synthetic(md):
+            factors = {}
+            factor_scores = {}
+            raw_signal = SignalOutput(
+                signal="HOLD",
+                score=50.0,
+                reasons=["分钟数据源不可用，使用日线估算分时展示"],
+            )
+        else:
+            factors = self.factor_engine.run(md)
+            raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
+                factors, md.price
+            )
         if not self._is_trading_time(md.timestamp):
             raw_signal = SignalOutput(
                 signal="HOLD",
@@ -432,6 +456,7 @@ class TradingEngine:
             t0_position=self.t0_pairer.position,
             buy_count=self.t0_pairer.buy_count,
             sell_count=self.t0_pairer.sell_count,
+            data_status="synthetic" if self._market_data_is_synthetic(md) else "ok",
         )
         self._latest = payload
 
@@ -439,6 +464,17 @@ class TradingEngine:
 
         asyncio.run_coroutine_threadsafe(
             self._post_tick(payload, has_notification), self._loop
+        )
+
+    def _publish_loading_payload_locked(self, reason: str) -> None:
+        if self._loop is None:
+            return
+        payload = self._empty_payload(self.trade_date, reason)
+        payload.name = self._latest.name if self._latest else self.symbol
+        payload.data_status = "loading"
+        self._latest = payload
+        asyncio.run_coroutine_threadsafe(
+            self._post_tick(payload, False), self._loop
         )
 
     def _publish_offhours_snapshot_locked(self) -> None:
@@ -525,7 +561,7 @@ class TradingEngine:
             prev_close=source.prev_close,
             volume=float(current_bar.get("volume", 0) or 0),
             amount=float(current_bar.get("amount", 0) or 0),
-            change_pct=(price / source.prev_close - 1) * 100 if source.prev_close > 0 else 0.0,
+            change_pct=(price / source.prev_close - 1) * 100 if source.prev_close > 0 else None,
             bid1=source.bid1,
             ask1=source.ask1,
             minute_bars=partial_bars,
@@ -538,6 +574,10 @@ class TradingEngine:
                 str(current_bar.get("time", "")), source.timestamp
             ),
         )
+
+    @staticmethod
+    def _market_data_is_synthetic(md: MarketData) -> bool:
+        return bool(md.minute_bars) and all(bool(b.get("synthetic")) for b in md.minute_bars)
 
     def _build_minute_point(self, bar: dict) -> dict:
         time_key = self._normalize_point_time(str(bar.get("time", "")))

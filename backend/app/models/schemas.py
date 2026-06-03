@@ -21,7 +21,7 @@ class MarketData(BaseModel):
     prev_close: float = 0.0
     volume: float = 0.0
     amount: float = 0.0
-    change_pct: float = 0.0
+    change_pct: float | None = None
     bid1: OrderBookLevel = Field(default_factory=OrderBookLevel)
     ask1: OrderBookLevel = Field(default_factory=OrderBookLevel)
     minute_bars: list[dict[str, Any]] = Field(default_factory=list)
@@ -51,7 +51,7 @@ class RealtimePayload(BaseModel):
     name: str = ""
     trade_date: str = ""
     price: float = 0.0
-    change_pct: float = 0.0
+    change_pct: float | None = None
     signal: str = "HOLD"
     score: float = 50.0
     reasons: list[str] = Field(default_factory=list)
@@ -65,3 +65,4 @@ class RealtimePayload(BaseModel):
     t0_position: str = "flat"
     buy_count: int = 0
     sell_count: int = 0
+    data_status: str = "ok"

@@ -74,10 +74,16 @@ class AkshareDataFeed:
             row = df[df["item"] == "昨收"]
             if not row.empty:
                 val = _safe_float(row.iloc[0]["value"])
-                self._prev_close_cache[symbol] = val
-                return val
+                if val > 0:
+                    self._prev_close_cache[symbol] = val
+                    return val
         except Exception as e:
             logger.warning("prev_close: %s", e)
+
+        val = self._get_prev_close_from_daily(symbol)
+        if val > 0:
+            self._prev_close_cache[symbol] = val
+            return val
         return 0.0
 
     def fetch_quote(self, symbol: str) -> MarketData | None:
@@ -85,6 +91,7 @@ class AkshareDataFeed:
             minute_bars = self._fetch_minute_bars(symbol)
             if not minute_bars:
                 minute_bars = self._fetch_minute_bars_alt(symbol)
+            minute_bars = self._valid_minute_bars(minute_bars)
             if not minute_bars:
                 return None
             minute_bars = self._add_intraday_avg(minute_bars)
@@ -94,9 +101,7 @@ class AkshareDataFeed:
             volume = _safe_float(last.get("volume"))
             amount = _safe_float(last.get("amount"))
             prev_close = self._get_prev_close(symbol)
-            change_pct = (
-                (price / prev_close - 1) * 100 if prev_close > 0 else 0.0
-            )
+            change_pct = (price / prev_close - 1) * 100 if prev_close > 0 else None
 
             bid1, ask1 = self._fetch_orderbook(symbol, price)
             vwap = self._calc_vwap(minute_bars, price, amount, volume)
@@ -144,8 +149,11 @@ class AkshareDataFeed:
             if not minute_bars:
                 minute_bars = self._fetch_minute_bars_for_date(symbol, trade_date)
                 minute_bars = self._completed_minute_bars(minute_bars, trade_date)
+                minute_bars = self._valid_minute_bars(minute_bars)
                 if minute_bars and not any(bar.get("synthetic") for bar in minute_bars):
                     save_cached_minute_bars(symbol, trade_date, minute_bars)
+            else:
+                minute_bars = self._valid_minute_bars(minute_bars)
             if not minute_bars:
                 return None
 
@@ -177,7 +185,7 @@ class AkshareDataFeed:
                 prev_close=prev_close,
                 volume=_safe_float(last.get("volume")),
                 amount=_safe_float(last.get("amount")),
-                change_pct=(price / prev_close - 1) * 100 if prev_close > 0 else 0.0,
+                change_pct=(price / prev_close - 1) * 100 if prev_close > 0 else None,
                 bid1=OrderBookLevel(price=price),
                 ask1=OrderBookLevel(price=price),
                 minute_bars=minute_bars,
@@ -276,6 +284,25 @@ class AkshareDataFeed:
             )
         return sorted(bars, key=lambda b: self._bar_datetime_key(b, trade_date))
 
+    def _valid_minute_bars(self, bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        valid: list[dict[str, Any]] = []
+        for bar in bars:
+            close = _safe_float(bar.get("close"))
+            high = _safe_float(bar.get("high"), close)
+            low = _safe_float(bar.get("low"), close)
+            open_ = _safe_float(bar.get("open"), close)
+            if close <= 0 or high <= 0 or low <= 0 or open_ <= 0:
+                continue
+            if high < low:
+                continue
+            item = dict(bar)
+            item["close"] = close
+            item["high"] = high
+            item["low"] = low
+            item["open"] = open_
+            valid.append(item)
+        return valid
+
     def _completed_minute_bars(
         self, bars: list[dict[str, Any]], trade_date: str
     ) -> list[dict[str, Any]]:
@@ -345,6 +372,25 @@ class AkshareDataFeed:
                 return _safe_float(rows.reset_index(drop=True).iloc[current_idx - 1].get("收盘"))
         except Exception as e:
             logger.warning("history prev_close: %s", e)
+        return 0.0
+
+    def _get_prev_close_from_daily(self, symbol: str) -> float:
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = self._fetch_daily_rows_from_sina(symbol, today, 20)
+        if rows.empty:
+            return 0.0
+
+        rows = rows.sort_values("日期").reset_index(drop=True)
+        today_rows = rows[rows["日期"].astype(str).str[:10] == today]
+        if not today_rows.empty:
+            today_idx = int(today_rows.index[-1])
+            if today_idx > 0:
+                return _safe_float(rows.iloc[today_idx - 1].get("收盘"))
+
+        if len(rows) >= 2:
+            return _safe_float(rows.iloc[-2].get("收盘"))
+        if len(rows) == 1 and str(rows.iloc[0].get("日期"))[:10] != today:
+            return _safe_float(rows.iloc[0].get("收盘"))
         return 0.0
 
     def find_shifted_trade_date(

@@ -273,12 +273,15 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
 export function IntradayChart({ data, loading = false }: Props) {
   const points = data?.minute_points ?? [];
   const marks = data?.signal_marks ?? [];
+  const isLoadingData = data?.data_status === "loading";
 
-  if (points.length === 0) {
+  if (isLoadingData || points.length === 0) {
     return (
       <div className="panel chart-panel">
         <h3>分时图</h3>
-        <p className="muted">暂无分时数据（非交易时段或行情加载中）</p>
+        <p className="muted">
+          {isLoadingData ? "行情加载中，暂不计算买卖点" : "暂无分时数据（非交易时段或行情加载中）"}
+        </p>
       </div>
     );
   }
@@ -334,6 +337,9 @@ export function IntradayChart({ data, loading = false }: Props) {
         <div className="chart-badges">
           {loading ? (
             <span className="t0-stats pending">数据准备中，保留上一版图形</span>
+          ) : null}
+          {data?.data_status === "synthetic" ? (
+            <span className="t0-stats pending">分钟行情不可用，仅展示日线估算，不计算买卖点</span>
           ) : null}
           <span className={`t0-stats ${balanced ? "balanced" : "open"}`}>
             已完成 买 {buyN} / 卖 {sellN}

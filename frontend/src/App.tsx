@@ -34,6 +34,8 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [stableChartData, setStableChartData] = useState<RealtimePayload | null>(null);
   const isPreparingData = loading || dateLoading || clearing || refreshing;
+  const isDataLoading = data?.data_status === "loading";
+  const isSyntheticData = data?.data_status === "synthetic";
 
   useEffect(() => {
     if ((data?.minute_points?.length ?? 0) > 0) {
@@ -41,7 +43,7 @@ export default function App() {
     }
   }, [data]);
 
-  const chartData = isPreparingData && stableChartData ? stableChartData : data;
+  const chartData = isDataLoading ? data : isPreparingData && stableChartData ? stableChartData : data;
 
   const handleSetSymbol = async () => {
     setLoading(true);
@@ -168,18 +170,21 @@ export default function App() {
           </h2>
           <p className="trade-date">交易日：{data?.trade_date || tradeDate}</p>
           <div className="price-row">
-            <span className="price">{data?.price?.toFixed(2) ?? "—"}</span>
+            <span className="price">{isDataLoading ? "加载中" : data?.price?.toFixed(2) ?? "—"}</span>
             <span
               className={
                 (data?.change_pct ?? 0) >= 0 ? "change up" : "change down"
               }
             >
-              {data?.change_pct != null
+              {!isDataLoading && data?.change_pct != null
                 ? `${data.change_pct >= 0 ? "+" : ""}${data.change_pct.toFixed(2)}%`
                 : "—"}
             </span>
           </div>
-          <p className="vwap">VWAP: {data?.vwap?.toFixed(2) ?? "—"}</p>
+          <p className="vwap">
+            VWAP: {isDataLoading ? "行情加载中" : data?.vwap?.toFixed(2) ?? "—"}
+            {isSyntheticData ? " · 分钟行情不可用，仅展示日线估算" : ""}
+          </p>
           <p className="t0-pair">
             已完成 T0：买 {data?.buy_count ?? 0} / 卖 {data?.sell_count ?? 0} ✓ 数量相等
             {data?.pending_buy ? ` · 待卖出买点 ${data.pending_buy.price.toFixed(2)}` : ""}
@@ -187,7 +192,7 @@ export default function App() {
         </div>
         <div className={`signal-card ${signalClass(data?.signal ?? "HOLD")}`}>
           <div className="signal-label">当前信号</div>
-          <div className="signal-value">{data?.signal ?? "HOLD"}</div>
+          <div className="signal-value">{isDataLoading ? "LOADING" : data?.signal ?? "HOLD"}</div>
           <div className="signal-score">强度 {data?.score?.toFixed(0) ?? "—"}</div>
           <ul className="reasons">
             {(data?.reasons ?? []).map((r) => (
