@@ -6,6 +6,7 @@ from datetime import datetime, time
 from app.models.schemas import SignalOutput
 
 # A股收盘前需平仓，保证当日买卖对等
+_LAST_BUY_TIME = time(14, 50)
 _FORCE_CLOSE_TIME = time(14, 54)
 _MARKET_CLOSE_TIME = time(15, 0)
 
@@ -97,6 +98,16 @@ class T0SignalPairer:
                 reasons=["收盘前T0平仓"] + raw.reasons[:3],
             )
 
+        if raw.signal == "BUY" and self._position == "flat" and now.time() >= _LAST_BUY_TIME:
+            return T0Decision(
+                display_signal=SignalOutput(
+                    signal="HOLD",
+                    score=raw.score,
+                    reasons=["14:50后不再触发买入"] + raw.reasons[:2],
+                ),
+                pending_mark=self.pending_buy,
+            )
+
         if raw.signal == "BUY" and self._position == "flat":
             self._position = "long"
             self._pending_buy = {
@@ -147,9 +158,9 @@ class T0SignalPairer:
             if self._position == "long":
                 return T0Decision(
                     display_signal=SignalOutput(
-                    signal="HOLD",
-                    score=raw.score,
-                    reasons=["已买入，等待卖点配对"] + raw.reasons[:2],
+                        signal="HOLD",
+                        score=raw.score,
+                        reasons=["已买入，等待卖点配对"] + raw.reasons[:2],
                     ),
                     pending_mark=self.pending_buy,
                 )

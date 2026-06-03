@@ -29,19 +29,19 @@ log() {
 setup_node_path() {
   local dir
   for dir in \
-    "${RUNTIME_ROOT}/node/bin" \
-    "${APP_ROOT:-/data/app}/runtime/node/bin" \
-    "${NODE_HOME:-}/bin" \
-    "${NVM_DIR:-}/versions/node/default/bin" \
-    /root/.nvm/versions/node/*/bin \
-    /usr/local/node/bin \
-    /usr/local/nodejs/bin \
-    /usr/local/bin \
-    /usr/bin \
-    /opt/node/bin \
-    /opt/nodejs/bin \
+    /data/nodejs/bin \
     /data/node/bin \
-    /data/nodejs/bin; do
+    /opt/nodejs/bin \
+    /opt/node/bin \
+    /usr/bin \
+    /usr/local/bin \
+    /usr/local/nodejs/bin \
+    /usr/local/node/bin \
+    /root/.nvm/versions/node/*/bin \
+    "${NVM_DIR:-}/versions/node/default/bin" \
+    "${NODE_HOME:-}/bin" \
+    "${APP_ROOT:-/data/app}/runtime/node/bin" \
+    "${RUNTIME_ROOT}/node/bin"; do
     if [[ -d "${dir}" ]]; then
       export PATH="${dir}:${PATH}"
     fi
@@ -51,6 +51,10 @@ setup_node_path() {
     # shellcheck disable=SC1090
     source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
   fi
+}
+
+node_major_version() {
+  node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0
 }
 
 setup_python_bin() {
@@ -99,7 +103,7 @@ install_frontend_node_dependencies() {
 }
 
 install_node_if_missing() {
-  if command -v node >/dev/null 2>&1 && command -v "${NPM_BIN}" >/dev/null 2>&1; then
+  if command -v node >/dev/null 2>&1 && command -v "${NPM_BIN}" >/dev/null 2>&1 && (( "$(node_major_version)" >= 18 )); then
     return
   fi
 

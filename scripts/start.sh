@@ -28,19 +28,19 @@ log() {
 setup_node_path() {
   local dir
   for dir in \
-    "${RUNTIME_ROOT}/node/bin" \
-    "${APP_ROOT:-/data/app}/runtime/node/bin" \
-    "${NODE_HOME:-}/bin" \
-    "${NVM_DIR:-}/versions/node/default/bin" \
-    /root/.nvm/versions/node/*/bin \
-    /usr/local/node/bin \
-    /usr/local/nodejs/bin \
-    /usr/local/bin \
-    /usr/bin \
-    /opt/node/bin \
-    /opt/nodejs/bin \
+    /data/nodejs/bin \
     /data/node/bin \
-    /data/nodejs/bin; do
+    /opt/nodejs/bin \
+    /opt/node/bin \
+    /usr/bin \
+    /usr/local/bin \
+    /usr/local/nodejs/bin \
+    /usr/local/node/bin \
+    /root/.nvm/versions/node/*/bin \
+    "${NVM_DIR:-}/versions/node/default/bin" \
+    "${NODE_HOME:-}/bin" \
+    "${APP_ROOT:-/data/app}/runtime/node/bin" \
+    "${RUNTIME_ROOT}/node/bin"; do
     if [[ -d "${dir}" ]]; then
       export PATH="${dir}:${PATH}"
     fi
@@ -49,6 +49,20 @@ setup_node_path() {
   if ! command -v node >/dev/null 2>&1 && [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
     # shellcheck disable=SC1090
     source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+  fi
+}
+
+node_major_version() {
+  node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0
+}
+
+ensure_node_version() {
+  local major
+  major="$(node_major_version)"
+  if (( major < 18 )); then
+    echo "Node.js 18+ is required by Vite. Current node: $(command -v node) ($(node -v 2>/dev/null || echo missing))" >&2
+    echo "Run scripts/install_deps.sh to install the bundled Node.js runtime, or set NODE_HOME to Node.js 18+." >&2
+    exit 1
   fi
 }
 
@@ -153,6 +167,7 @@ if ! command -v "${NPM_BIN}" >/dev/null 2>&1; then
   echo "  NODE_HOME=/usr/local/node bash scripts/start.sh" >&2
   exit 1
 fi
+ensure_node_version
 
 ensure_frontend_node_dependencies
 

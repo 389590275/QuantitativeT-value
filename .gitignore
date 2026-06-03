@@ -9,3 +9,4 @@ frontend/dist-electron/
 frontend/release/
 .idea/
 *.db
+/runtime/
