@@ -8,7 +8,8 @@ import akshare as ak
 import pandas as pd
 
 from app.models.database import get_cached_minute_bars, save_cached_minute_bars
-from app.models.schemas import MarketData, OrderBookLevel
+from app.models.schemas import MarketData, OrderBookLevel, VwapThresholdsInfo
+from app.signal.vwap_thresholds import build_vwap_thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,71 @@ class AkshareDataFeed:
     def __init__(self) -> None:
         self._name_cache: dict[str, str] = {}
         self._prev_close_cache: dict[str, float] = {}
+
+    def get_avg_amplitude_5d(self, symbol: str, trade_date: str) -> float:
+        """最近 5 个已完成交易日的日振幅均值（%）。"""
+        rows = self._fetch_daily_rows_from_sina(symbol, trade_date, 40)
+        if rows.empty:
+            rows = self._fetch_hist_daily_rows(symbol, trade_date, 40)
+        if rows.empty:
+            return 0.0
+
+        rows = rows.sort_values("日期").reset_index(drop=True)
+        amplitudes: list[float] = []
+        for i in range(1, len(rows)):
+            row = rows.iloc[i]
+            day = str(row.get("日期", ""))[:10]
+            if not day or day >= trade_date:
+                continue
+            amp = self._daily_amplitude_pct(row, rows.iloc[i - 1])
+            if amp > 0:
+                amplitudes.append(amp)
+
+        if not amplitudes:
+            return 0.0
+        sample = amplitudes[-5:]
+        return sum(sample) / len(sample)
+
+    def compute_vwap_thresholds(
+        self, symbol: str, trade_date: str
+    ) -> VwapThresholdsInfo:
+        return build_vwap_thresholds(self.get_avg_amplitude_5d(symbol, trade_date))
+
+    @staticmethod
+    def _daily_amplitude_pct(row: Any, prev_row: Any) -> float:
+        if hasattr(row, "index") and "振幅" in row.index:
+            amp = _safe_float(row.get("振幅"))
+            if amp > 0:
+                return amp
+        prev_close = _safe_float(prev_row.get("收盘"))
+        high = _safe_float(row.get("最高"))
+        low = _safe_float(row.get("最低"))
+        if prev_close > 0 and high >= low:
+            return (high - low) / prev_close * 100.0
+        return 0.0
+
+    def _fetch_hist_daily_rows(
+        self, symbol: str, trade_date: str, lookback_days: int
+    ) -> pd.DataFrame:
+        try:
+            dt = datetime.strptime(trade_date, "%Y-%m-%d")
+            start = (dt - timedelta(days=lookback_days)).strftime("%Y%m%d")
+            end = dt.strftime("%Y%m%d")
+            df = ak.stock_zh_a_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start,
+                end_date=end,
+                adjust="",
+            )
+            if df is None or df.empty:
+                return pd.DataFrame()
+            rows = df.copy()
+            rows["日期"] = rows["日期"].astype(str).str[:10]
+            return rows.sort_values("日期").reset_index(drop=True)
+        except Exception as e:
+            logger.warning("hist daily: %s", e)
+            return pd.DataFrame()
 
     def get_stock_name(self, symbol: str) -> str:
         if symbol in self._name_cache:
@@ -117,15 +183,24 @@ class AkshareDataFeed:
         self, symbol: str, trade_date: str, refresh_cache: bool = False
     ) -> MarketData | None:
         try:
-            minute_bars = [] if refresh_cache else get_cached_minute_bars(symbol, trade_date)
-            if not minute_bars:
-                minute_bars = self._fetch_minute_bars_for_date(symbol, trade_date)
-                minute_bars = self._completed_minute_bars(minute_bars, trade_date)
-                minute_bars = self._valid_minute_bars(minute_bars)
-                if minute_bars and not any(bar.get("synthetic") for bar in minute_bars):
-                    save_cached_minute_bars(symbol, trade_date, minute_bars)
+            cached_bars = [] if refresh_cache else get_cached_minute_bars(symbol, trade_date)
+            cached_bars = self._valid_minute_bars(cached_bars)
+            cache_needs_refresh = self._history_cache_needs_refresh(
+                cached_bars, trade_date
+            )
+
+            if refresh_cache or cache_needs_refresh:
+                fetched_bars = self._fetch_minute_bars_for_date(symbol, trade_date)
+                fetched_bars = self._completed_minute_bars(fetched_bars, trade_date)
+                fetched_bars = self._valid_minute_bars(fetched_bars)
+                if fetched_bars:
+                    minute_bars = fetched_bars
+                    if not any(bar.get("synthetic") for bar in minute_bars):
+                        save_cached_minute_bars(symbol, trade_date, minute_bars)
+                else:
+                    minute_bars = [] if cache_needs_refresh else cached_bars
             else:
-                minute_bars = self._valid_minute_bars(minute_bars)
+                minute_bars = cached_bars
             if not minute_bars:
                 return None
 
@@ -274,6 +349,38 @@ class AkshareDataFeed:
             item["open"] = open_
             valid.append(item)
         return valid
+
+    def _history_cache_needs_refresh(
+        self, bars: list[dict[str, Any]], trade_date: str
+    ) -> bool:
+        if not bars:
+            return True
+        if any(bar.get("synthetic") for bar in bars):
+            return False
+        if trade_date == datetime.now().strftime("%Y-%m-%d"):
+            return False
+
+        parsed_times = [
+            self._parse_bar_datetime(str(bar.get("time", "")), trade_date)
+            for bar in bars
+        ]
+        parsed_times = [dt for dt in parsed_times if dt is not None]
+        if not parsed_times:
+            return True
+
+        first_bar = min(parsed_times)
+        last_bar = max(parsed_times)
+        trade_dt = datetime.strptime(trade_date, "%Y-%m-%d")
+        latest_acceptable_first = trade_dt.replace(hour=9, minute=40, second=0)
+        earliest_acceptable_last = trade_dt.replace(hour=14, minute=50, second=0)
+
+        # A full A-share day is roughly 240 one-minute bars. Use a small tolerance
+        # for provider differences, but refresh clearly incomplete cached data.
+        return (
+            len(parsed_times) < 220
+            or first_bar > latest_acceptable_first
+            or last_bar < earliest_acceptable_last
+        )
 
     def _completed_minute_bars(
         self, bars: list[dict[str, Any]], trade_date: str
@@ -490,13 +597,15 @@ class AkshareDataFeed:
     ) -> float:
         if bars:
             last_avg = _safe_float(bars[-1].get("vwap"))
-            if last_avg > 0:
+            if self._is_reasonable_avg_price(last_avg, price):
                 return last_avg
         if bars:
             total_amt = sum(_safe_float(b.get("amount")) for b in bars)
             total_vol = sum(_safe_float(b.get("volume")) for b in bars)
             if total_vol > 0 and total_amt > 0:
-                return total_amt / total_vol
+                avg = self._normalize_avg_price(total_amt / total_vol, price)
+                if avg > 0:
+                    return avg
             closes = [
                 _safe_float(b.get("close"))
                 for b in bars
@@ -505,7 +614,9 @@ class AkshareDataFeed:
             if closes:
                 return sum(closes) / len(closes)
         if volume > 0 and amount > 0:
-            return amount / volume
+            avg = self._normalize_avg_price(amount / volume, price)
+            if avg > 0:
+                return avg
         return price
 
     def _add_intraday_avg(self, bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -532,7 +643,13 @@ class AkshareDataFeed:
             total_volume += volume
 
             if total_amount > 0 and total_volume > 0:
-                item["vwap"] = total_amount / total_volume
+                avg = self._normalize_avg_price(total_amount / total_volume, close)
+                if avg > 0:
+                    item["vwap"] = avg
+                elif fallback_count > 0:
+                    item["vwap"] = fallback_sum / fallback_count
+                else:
+                    item["vwap"] = close
             elif fallback_count > 0:
                 item["vwap"] = fallback_sum / fallback_count
             else:
@@ -541,3 +658,27 @@ class AkshareDataFeed:
             enriched.append(item)
 
         return enriched
+
+    @staticmethod
+    def _normalize_avg_price(avg: float, reference_price: float) -> float:
+        if avg <= 0:
+            return 0.0
+        if reference_price <= 0:
+            return avg
+        ratio = avg / reference_price
+        if 0.5 <= ratio <= 1.5:
+            return avg
+        # A 股分钟接口常见：成交量为“手”、成交额为“元”，直接相除会放大 100 倍。
+        if 50 <= ratio <= 150:
+            normalized = avg / 100.0
+            if 0.5 <= normalized / reference_price <= 1.5:
+                return normalized
+        return 0.0
+
+    @staticmethod
+    def _is_reasonable_avg_price(avg: float, reference_price: float) -> bool:
+        if avg <= 0:
+            return False
+        if reference_price <= 0:
+            return True
+        return 0.5 <= avg / reference_price <= 1.5

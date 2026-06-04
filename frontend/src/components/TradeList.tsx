@@ -8,10 +8,6 @@ function formatPrice(value: number | undefined): string {
   return typeof value === "number" && !Number.isNaN(value) ? value.toFixed(2) : "—";
 }
 
-function formatScore(value: number | undefined): string {
-  return typeof value === "number" && !Number.isNaN(value) ? value.toFixed(0) : "—";
-}
-
 export function TradeList({ data }: Props) {
   const rows = data?.signal_marks ?? [];
   const pendingBuy = data?.pending_buy;
@@ -27,8 +23,7 @@ export function TradeList({ data }: Props) {
 
       {pendingBuy ? (
         <div className="pending-trade">
-          待卖出：{pendingBuy.time} 买入 {formatPrice(pendingBuy.price)}，
-          强度 {formatScore(pendingBuy.score)}
+          待卖出：{pendingBuy.time} 买入 {formatPrice(pendingBuy.price)}
         </div>
       ) : null}
 
@@ -41,7 +36,6 @@ export function TradeList({ data }: Props) {
               <th>时间</th>
               <th>方向</th>
               <th>价格</th>
-              <th>评分</th>
             </tr>
           </thead>
           <tbody>
@@ -50,7 +44,6 @@ export function TradeList({ data }: Props) {
                 <td>{row.time}</td>
                 <td>{row.signal === "BUY" ? "买" : "卖"}</td>
                 <td>{formatPrice(row.price)}</td>
-                <td>{formatScore(row.score)}</td>
               </tr>
             ))}
           </tbody>

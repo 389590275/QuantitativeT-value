@@ -9,6 +9,8 @@ from app.models.schemas import SignalOutput
 _LAST_BUY_TIME = time(14, 50)
 _FORCE_CLOSE_TIME = time(14, 54)
 _MARKET_CLOSE_TIME = time(15, 0)
+_TAKE_PROFIT_RATIO = 0.015
+_TURN_DOWN_PROFIT_RATIO = 0.008
 
 
 @dataclass
@@ -94,15 +96,34 @@ class T0SignalPairer:
         if self._position == "long" and _FORCE_CLOSE_TIME <= now.time() <= _MARKET_CLOSE_TIME:
             raw = SignalOutput(
                 signal="SELL",
-                score=raw.score,
                 reasons=["收盘前T0平仓"] + raw.reasons[:3],
             )
+
+        if (
+            self._position == "long"
+            and self._pending_buy
+            and price > 0
+        ):
+            buy_price = float(self._pending_buy.get("price", 0) or 0)
+            gain_ratio = (price - buy_price) / buy_price if buy_price > 0 else 0.0
+            turn_down = self._has_turn_down(raw)
+            if gain_ratio >= _TAKE_PROFIT_RATIO:
+                gain_pct = (price - buy_price) / buy_price * 100
+                raw = SignalOutput(
+                    signal="SELL",
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%达到1.5%止盈"] + raw.reasons[:3],
+                )
+            elif raw.signal != "SELL" and gain_ratio >= _TURN_DOWN_PROFIT_RATIO and turn_down:
+                gain_pct = (price - buy_price) / buy_price * 100
+                raw = SignalOutput(
+                    signal="SELL",
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%且指标拐头向下"] + raw.reasons[:3],
+                )
 
         if raw.signal == "BUY" and self._position == "flat" and now.time() >= _LAST_BUY_TIME:
             return T0Decision(
                 display_signal=SignalOutput(
                     signal="HOLD",
-                    score=raw.score,
                     reasons=["14:50后不再触发买入"] + raw.reasons[:2],
                 ),
                 pending_mark=self.pending_buy,
@@ -114,7 +135,6 @@ class T0SignalPairer:
                 "time": time_key,
                 "signal": "BUY",
                 "price": price,
-                "score": raw.score,
                 "reason": " / ".join(raw.reasons[:3]),
             }
             return T0Decision(
@@ -131,7 +151,6 @@ class T0SignalPairer:
                 return T0Decision(
                     display_signal=SignalOutput(
                         signal="HOLD",
-                        score=raw.score,
                         reasons=["缺少买点，卖点已忽略"],
                     )
                 )
@@ -140,7 +159,6 @@ class T0SignalPairer:
                 "time": time_key,
                 "signal": "SELL",
                 "price": price,
-                "score": raw.score,
                 "reason": " / ".join(raw.reasons[:3]),
             }
             pair = [self._pending_buy, sell_mark]
@@ -159,7 +177,6 @@ class T0SignalPairer:
                 return T0Decision(
                     display_signal=SignalOutput(
                         signal="HOLD",
-                        score=raw.score,
                         reasons=["已买入，等待卖点配对"] + raw.reasons[:2],
                     ),
                     pending_mark=self.pending_buy,
@@ -168,7 +185,6 @@ class T0SignalPairer:
                 return T0Decision(
                     display_signal=SignalOutput(
                         signal="HOLD",
-                        score=raw.score,
                         reasons=["T0配对过滤"] + raw.reasons[:2],
                     )
                 )
@@ -182,3 +198,7 @@ class T0SignalPairer:
             if ":" in part:
                 return part[:8] if len(part) >= 8 else part[:5] + ":00"
         return now.strftime("%H:%M:%S")
+
+    @staticmethod
+    def _has_turn_down(raw: SignalOutput) -> bool:
+        return any("拐头向下" in reason for reason in raw.reasons)

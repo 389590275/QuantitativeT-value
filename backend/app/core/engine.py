@@ -15,7 +15,8 @@ from app.models.database import (
     insert_signal,
     insert_tick,
 )
-from app.models.schemas import MarketData, RealtimePayload, SignalOutput
+from app.models.schemas import MarketData, RealtimePayload, SignalOutput, VwapThresholdsInfo
+from app.signal.vwap_thresholds import DEFAULT_VWAP_THRESHOLDS, resolve_vwap_thresholds
 from app.notify.desktop import send_desktop_notification
 from app.notify.wecom import send_wecom
 from app.signal.engine import SignalEngine
@@ -42,6 +43,8 @@ class TradingEngine:
         self._last_offhours_replay_at: datetime | None = None
         self._last_offhours_payload_key: tuple[str, str, int] | None = None
         self._calc_lock = threading.RLock()
+        self._vwap_thresholds: VwapThresholdsInfo = DEFAULT_VWAP_THRESHOLDS
+        self._refresh_vwap_thresholds()
         self._restore_t0_state()
 
     def _restore_t0_state(self, trade_date: str | None = None) -> None:
@@ -67,6 +70,7 @@ class TradingEngine:
         self._latest = None
         self._last_offhours_replay_at = None
         self._last_offhours_payload_key = None
+        self._refresh_vwap_thresholds()
         self._restore_t0_state()
         name = await asyncio.to_thread(self.datafeed.get_stock_name, self.symbol)
         if self.trade_date != self._today():
@@ -233,6 +237,9 @@ class TradingEngine:
         if md is None or not md.minute_bars:
             return 0
 
+        self._refresh_vwap_thresholds(trade_date)
+        md = self._attach_thresholds(md)
+
         self._tick_history = []
         self._factor_snapshots = {}
         self.t0_pairer.reset_day(trade_date)
@@ -240,6 +247,7 @@ class TradingEngine:
         latest_signal = SignalOutput()
         latest_factors: dict[str, float] = {}
         latest_factor_status: dict[str, str] = {}
+        latest_effective_thresholds = self._vwap_thresholds
 
         for i, bar in enumerate(md.minute_bars):
             price = float(bar.get("close", 0) or 0)
@@ -248,26 +256,27 @@ class TradingEngine:
             time_key = self._normalize_point_time(str(bar.get("time", "")))
             partial_bars = md.minute_bars[: i + 1]
             replay_md = self._build_replay_market_data(md, partial_bars, bar, price)
+            effective_thresholds = resolve_vwap_thresholds(
+                md.vwap_thresholds, replay_md.timestamp
+            )
+            replay_md.vwap_thresholds = effective_thresholds
+            latest_effective_thresholds = effective_thresholds
 
             self._tick_history.append(
                 {"price": price, "time": time_key or replay_md.timestamp.isoformat()}
             )
-            if len(self._tick_history) > 100:
-                self._tick_history = self._tick_history[-100:]
             replay_md.tick_history = list(self._tick_history)
 
             if self._market_data_is_synthetic(replay_md):
                 factors = {}
-                factor_scores = {}
                 raw_signal = SignalOutput(
                     signal="HOLD",
-                    score=50.0,
                     reasons=["分钟数据源不可用，使用日线估算分时展示"],
                 )
             else:
                 factors = self.factor_engine.run(replay_md)
-                raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
-                    factors, price
+                raw_signal, _meta = self.signal_engine.evaluate_with_meta(
+                    factors, price, replay_md.vwap_thresholds
                 )
             decision = self.t0_pairer.apply(raw_signal, price, time_key, replay_md.timestamp)
             latest_signal = decision.display_signal
@@ -277,9 +286,7 @@ class TradingEngine:
             self._factor_snapshots[time_key] = {
                 "factors": latest_factors,
                 "factor_status": latest_factor_status,
-                "factor_scores": factor_scores,
                 "signal": latest_signal.signal,
-                "score": latest_signal.score,
                 "reasons": latest_signal.reasons,
             }
 
@@ -289,7 +296,6 @@ class TradingEngine:
                         replay_md,
                         SignalOutput(
                             signal=str(persisted["signal"]),
-                            score=float(persisted.get("score", latest_signal.score)),
                             reasons=latest_signal.reasons,
                         ),
                         price=float(persisted.get("price", price)),
@@ -310,14 +316,9 @@ class TradingEngine:
             price=md.price,
             change_pct=md.change_pct,
             signal=latest_signal.signal,
-            score=latest_signal.score,
             reasons=latest_signal.reasons,
             factors=latest_factors,
             factor_status=latest_factor_status,
-            factor_scores=self._factor_snapshots.get(
-                self._normalize_point_time(str(md.minute_bars[-1].get("time", ""))),
-                {},
-            ).get("factor_scores", {}),
             vwap=md.vwap,
             minute_points=minute_points,
             signal_marks=self.t0_pairer.marks,
@@ -326,6 +327,7 @@ class TradingEngine:
             buy_count=self.t0_pairer.buy_count,
             sell_count=self.t0_pairer.sell_count,
             data_status="synthetic" if self._market_data_is_synthetic(md) else "ok",
+            vwap_thresholds=latest_effective_thresholds,
         )
         return len(md.minute_bars)
 
@@ -347,7 +349,6 @@ class TradingEngine:
             trade_date=trade_date,
             quote_time="",
             signal="HOLD",
-            score=50.0,
             reasons=[reason],
             minute_points=[],
             signal_marks=[],
@@ -356,7 +357,18 @@ class TradingEngine:
             buy_count=0,
             sell_count=0,
             data_status="loading",
+            vwap_thresholds=self._vwap_thresholds,
         )
+
+    def _refresh_vwap_thresholds(self, trade_date: str | None = None) -> None:
+        date_key = trade_date or self.trade_date
+        self._vwap_thresholds = self.datafeed.compute_vwap_thresholds(
+            self.symbol, date_key
+        )
+
+    def _attach_thresholds(self, md: MarketData) -> MarketData:
+        md.vwap_thresholds = self._vwap_thresholds
+        return md
 
     async def start(self) -> None:
         if self._running:
@@ -388,6 +400,12 @@ class TradingEngine:
         if self.trade_date != self._today():
             return
         md = self.datafeed.fetch_quote(self.symbol)
+        if md is not None:
+            if self.trade_date != self._today():
+                self._refresh_vwap_thresholds(self.trade_date)
+            else:
+                self._refresh_vwap_thresholds()
+            md = self._attach_thresholds(md)
         if md is None:
             if self._is_trading_time(datetime.now()):
                 # 行情源短暂不可用时保留上一笔有效行情，不用 loading 覆盖前端。
@@ -409,27 +427,24 @@ class TradingEngine:
         self._tick_history.append(
             {"price": md.price, "time": md.timestamp.isoformat()}
         )
-        if len(self._tick_history) > 100:
-            self._tick_history = self._tick_history[-100:]
         md.tick_history = list(self._tick_history)
+        effective_thresholds = resolve_vwap_thresholds(self._vwap_thresholds, md.timestamp)
+        md.vwap_thresholds = effective_thresholds
 
         if self._market_data_is_synthetic(md):
             factors = {}
-            factor_scores = {}
             raw_signal = SignalOutput(
                 signal="HOLD",
-                score=50.0,
                 reasons=["分钟数据源不可用，使用日线估算分时展示"],
             )
         else:
             factors = self.factor_engine.run(md)
-            raw_signal, factor_scores = self.signal_engine.evaluate_with_scores(
-                factors, md.price
+            raw_signal, _meta = self.signal_engine.evaluate_with_meta(
+                factors, md.price, md.vwap_thresholds
             )
         if not self._is_trading_time(md.timestamp):
             raw_signal = SignalOutput(
                 signal="HOLD",
-                score=50.0,
                 reasons=["休盘时间不触发买卖点"],
             )
 
@@ -449,9 +464,7 @@ class TradingEngine:
         self._factor_snapshots[latest_point_time] = {
             "factors": factor_values,
             "factor_status": factor_status,
-            "factor_scores": factor_scores,
             "signal": signal.signal,
-            "score": signal.score,
             "reasons": signal.reasons,
         }
         if len(self._factor_snapshots) > 260:
@@ -472,7 +485,6 @@ class TradingEngine:
                 md,
                 SignalOutput(
                     signal=str(persisted["signal"]),
-                    score=float(persisted.get("score", signal.score)),
                     reasons=signal.reasons,
                 ),
                 price=float(persisted.get("price", md.price)),
@@ -481,7 +493,7 @@ class TradingEngine:
         if has_notification and decision.notify_signal:
             send_desktop_notification(
                 f"{md.name} {decision.notify_signal.signal}",
-                f"价格: {md.price} | 强度: {decision.notify_signal.score}\n"
+                f"价格: {md.price}\n"
                 f"今日买{self.t0_pairer.buy_count}/卖{self.t0_pairer.sell_count}\n"
                 f"{', '.join(decision.notify_signal.reasons)}",
             )
@@ -494,11 +506,9 @@ class TradingEngine:
             price=md.price,
             change_pct=md.change_pct,
             signal=signal.signal,
-            score=signal.score,
             reasons=signal.reasons,
             factors=factor_values,
             factor_status=factor_status,
-            factor_scores=factor_scores,
             vwap=md.vwap,
             minute_points=minute_points,
             signal_marks=self.t0_pairer.marks,
@@ -507,6 +517,7 @@ class TradingEngine:
             buy_count=self.t0_pairer.buy_count,
             sell_count=self.t0_pairer.sell_count,
             data_status="synthetic" if self._market_data_is_synthetic(md) else "ok",
+            vwap_thresholds=effective_thresholds,
         )
         self._latest = payload
 
@@ -586,7 +597,7 @@ class TradingEngine:
         insert_signal(
             md.symbol,
             signal.signal,
-            signal.score,
+            0.0,
             md.price if price is None else price,
             md.timestamp,
         )
@@ -620,6 +631,7 @@ class TradingEngine:
             index_cyb_change=source.index_cyb_change,
             northbound_net=source.northbound_net,
             sector_etf_change=source.sector_etf_change,
+            vwap_thresholds=source.vwap_thresholds,
             timestamp=self._datetime_from_point_time(
                 str(current_bar.get("time", "")), source.timestamp
             ),
@@ -704,7 +716,6 @@ class TradingEngine:
             f"**股票**: {payload.name} ({payload.symbol})\n"
             f"**信号**: {payload.signal}\n"
             f"**价格**: {payload.price}\n"
-            f"**强度**: {payload.score}\n"
             f"**今日**: 买{payload.buy_count} / 卖{payload.sell_count}\n"
             f"**原因**: {', '.join(payload.reasons)}"
         )

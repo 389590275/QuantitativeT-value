@@ -1,136 +1,86 @@
-from app.models.schemas import FactorResult, SignalOutput
+from __future__ import annotations
 
-
-VWAP_WEIGHT = 50.0
-KDJ_WEIGHT = 25.0
-MACD_WEIGHT = 25.0
-
-
-def _abs_strength(value: float, start: float, full: float, max_score: float) -> float:
-    """Map an absolute deviation to a bounded score contribution."""
-    if value <= start:
-        return 0.0
-    if full <= start:
-        return max_score
-    ratio = min(1.0, (value - start) / (full - start))
-    return ratio * max_score
+from app.models.schemas import FactorResult, SignalOutput, VwapThresholdsInfo
+from app.signal.vwap_thresholds import DEFAULT_VWAP_THRESHOLDS
 
 
 class SignalEngine:
     def evaluate(self, factors: dict[str, FactorResult], price: float) -> SignalOutput:
-        signal, _factor_scores = self.evaluate_with_scores(factors, price)
+        signal, _meta = self.evaluate_with_meta(factors, price)
         return signal
 
-    def evaluate_with_scores(
-        self, factors: dict[str, FactorResult], price: float
+    def evaluate_with_meta(
+        self,
+        factors: dict[str, FactorResult],
+        price: float,
+        thresholds: VwapThresholdsInfo | None = None,
     ) -> tuple[SignalOutput, dict[str, float]]:
+        t = thresholds or DEFAULT_VWAP_THRESHOLDS
         vwap = factors.get("vwap_bias")
         kdj5 = factors.get("kdj_5m")
         macd_fs = factors.get("macd_fs")
 
-        long_score = 0.0
-        short_score = 0.0
-        factor_scores: dict[str, float] = {
-            "vwap_bias": 0.0,
-            "kdj_5m": 0.0,
-            "macd_fs": 0.0,
-        }
         reasons: list[str] = []
-        buy_points = 0
-        sell_points = 0
 
         vwap_bias = vwap.value if vwap else 0.0
-        buy_zone = vwap_bias <= -0.2
-        sell_ready = vwap_bias >= -0.2
-        above_avg = vwap_bias > 0
-        extreme_down = vwap_bias <= -0.8
-        extreme_up = vwap_bias >= 0.8
+        buy_zone = vwap_bias <= -t.buy_zone_pct
 
-        if vwap:
-            buy_deviation_score = _abs_strength(
-                abs(vwap_bias), 0.2, 1.2, VWAP_WEIGHT
-            )
-            sell_deviation_score = _abs_strength(
-                max(vwap_bias + 0.2, 0), 0.0, 1.2, VWAP_WEIGHT
-            )
-            if buy_zone:
-                buy_points += 1
-                long_score += buy_deviation_score
-                factor_scores["vwap_bias"] += buy_deviation_score
-                reasons.append(f"低于分时均线{abs(vwap_bias):.2f}%")
-                if extreme_down:
-                    buy_points += 1
-                    reasons.append("分时超跌反转概率提高")
-            elif sell_ready:
-                sell_points += 1
-                if above_avg:
-                    contribution = max(15.0, sell_deviation_score)
-                    short_score += contribution
-                    factor_scores["vwap_bias"] -= contribution
-                    reasons.append(f"高于分时均线{vwap_bias:.2f}%")
-                else:
-                    contribution = 15.0
-                    short_score += contribution
-                    factor_scores["vwap_bias"] -= contribution
-                    reasons.append(f"接近分时均线{vwap_bias:.2f}%")
-                if extreme_up:
-                    sell_points += 1
-                    reasons.append("分时超涨回落概率提高")
+        if buy_zone:
+            reasons.append(f"低于分时均线{abs(vwap_bias):.2f}%")
 
-        if kdj5:
-            if kdj5.status == "强":
-                buy_points += 1
-                reasons.append("5分钟KDJ底部金叉/拐头")
-                long_score += KDJ_WEIGHT
-                factor_scores["kdj_5m"] += KDJ_WEIGHT
-            elif kdj5.status == "弱":
-                sell_points += 1
-                reasons.append("5分钟KDJ死叉")
-                short_score += KDJ_WEIGHT
-                factor_scores["kdj_5m"] -= KDJ_WEIGHT
+        kdj_strong = bool(kdj5 and kdj5.status == "强")
+        macd_strong = bool(macd_fs and macd_fs.status == "强")
+        kdj_death = bool(kdj5 and kdj5.status in ("死叉", "弱"))
+        macd_death = bool(macd_fs and macd_fs.status in ("死叉", "弱"))
+        kdj_turn_down = bool(kdj5 and kdj5.status == "拐头向下")
+        macd_turn_down = bool(macd_fs and macd_fs.status == "拐头向下")
 
-        if macd_fs:
-            if macd_fs.status == "强":
-                buy_points += 1
-                reasons.append("MACD底部金叉/拐头")
-                long_score += MACD_WEIGHT
-                factor_scores["macd_fs"] += MACD_WEIGHT
-            elif macd_fs.status == "弱":
-                sell_points += 1
-                reasons.append("MACD死叉")
-                short_score += MACD_WEIGHT
-                factor_scores["macd_fs"] -= MACD_WEIGHT
+        if kdj_strong:
+            reasons.append("5分钟KDJ底部金叉/拐头")
+        elif kdj_death:
+            reasons.append("5分钟KDJ死叉")
+        elif kdj_turn_down:
+            reasons.append("5分钟KDJ拐头向下")
 
-        long_score = max(0.0, min(100.0, long_score))
-        short_score = max(0.0, min(100.0, short_score))
-        score = long_score if long_score >= short_score else 100.0 - short_score
+        if macd_strong:
+            reasons.append("MACD底部金叉/拐头")
+        elif macd_death:
+            reasons.append("MACD死叉")
+        elif macd_turn_down:
+            reasons.append("MACD拐头向下")
 
-        if buy_points >= 3 and long_score >= 75 and buy_zone:
+        if buy_zone and (macd_strong or kdj_strong):
             return (
-                SignalOutput(signal="BUY", score=round(long_score, 1), reasons=reasons[:5]),
-                factor_scores,
+                SignalOutput(signal="BUY", reasons=reasons[:5]),
+                {},
             )
-        if kdj5 and kdj5.status == "弱":
+        if kdj_death:
             return (
-                SignalOutput(signal="SELL", score=round(100.0 - short_score, 1), reasons=reasons[:5]),
-                factor_scores,
+                SignalOutput(signal="SELL", reasons=reasons[:5]),
+                {},
             )
-        if macd_fs and macd_fs.status == "弱":
+        if macd_death:
             return (
-                SignalOutput(signal="SELL", score=round(100.0 - short_score, 1), reasons=reasons[:5]),
-                factor_scores,
+                SignalOutput(signal="SELL", reasons=reasons[:5]),
+                {},
             )
-        if buy_points >= 2 and long_score >= 55 and buy_zone:
+        if buy_zone:
             return (
-                SignalOutput(signal="WATCH", score=round(long_score, 1), reasons=reasons[:5]),
-                factor_scores,
+                SignalOutput(
+                    signal="WATCH",
+                    reasons=reasons[:5] or ["已低于分时均线，等待KDJ/MACD金叉或拐头"],
+                ),
+                {},
             )
-        if sell_points >= 2 and short_score >= 55 and sell_ready:
+        if kdj_turn_down or macd_turn_down:
             return (
-                SignalOutput(signal="WATCH", score=round(100.0 - short_score, 1), reasons=reasons[:5]),
-                factor_scores,
+                SignalOutput(signal="WATCH", reasons=reasons[:5]),
+                {},
             )
         return (
-            SignalOutput(signal="HOLD", score=round(score, 1), reasons=reasons[:3] or ["观望"]),
-            factor_scores,
+            SignalOutput(
+                signal="HOLD",
+                reasons=reasons[:3] or ["观望"],
+            ),
+            {},
         )

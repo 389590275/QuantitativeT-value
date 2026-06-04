@@ -7,17 +7,24 @@ class VwapBiasFactor(BaseFactor):
     key = "vwap_bias"
 
     def calculate(self, market_data: MarketData) -> FactorResult:
-        vwap = market_data.vwap or market_data.price
-        if vwap <= 0:
+        price = market_data.price
+        vwap = market_data.vwap or price
+        if price <= 0 or vwap <= 0:
             return FactorResult(name=self.name, value=0.0, status="中性")
-        bias = (market_data.price - vwap) / vwap * 100
-        if bias <= -0.8:
+
+        ratio = vwap / price
+        if ratio < 0.5 or ratio > 1.5:
+            return FactorResult(name=self.name, value=0.0, status="中性")
+
+        bias = (price - vwap) / vwap * 100
+        t = market_data.vwap_thresholds
+        if bias <= -t.extreme_down_pct:
             status = "低位"
-        elif bias >= 0.8:
+        elif bias >= t.extreme_up_pct:
             status = "高位"
-        elif bias <= -0.3:
+        elif bias <= -t.bias_status_pct:
             status = "偏低"
-        elif bias >= 0.3:
+        elif bias >= t.bias_status_pct:
             status = "偏高"
         else:
             status = "中性"

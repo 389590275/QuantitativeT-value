@@ -23,13 +23,10 @@ interface ChartPoint {
   vwap: number | null;
   factors?: Record<string, number>;
   factor_status?: Record<string, string>;
-  factor_scores?: Record<string, number>;
   signal?: string;
-  score?: number;
   reasons?: string[];
   markerSignal?: "BUY" | "SELL";
   markerPrice?: number;
-  markerScore?: number;
   markerReason?: string;
 }
 
@@ -170,7 +167,6 @@ function markerTitle(marker: MarkerPoint): string {
     `${marker.markerSignal === "BUY" ? "买点" : "卖点"} ${marker.time}`,
     `价格: ${formatNumber(marker.markerPrice ?? marker.price ?? undefined, 2)}`,
     `分时均线: ${formatNumber(marker.vwap ?? undefined, 2)}`,
-    `强度: ${formatNumber(marker.markerScore, 0)}`,
     `原因: ${marker.markerReason ?? "—"}`,
   ];
 
@@ -180,9 +176,8 @@ function markerTitle(marker: MarkerPoint): string {
   if (factorRows.length > 0) {
     title.push("因子快照:");
     factorRows.forEach(([key, value]) => {
-      const score = marker.factor_scores?.[key] ?? 0;
       title.push(
-        `${FACTOR_LABELS[key] ?? key}: ${formatNumber(value)} (${marker.factor_status?.[key] ?? "中性"}, 打分 ${score > 0 ? "+" : ""}${formatNumber(score, 1)})`
+        `${FACTOR_LABELS[key] ?? key}: ${formatNumber(value)} (${marker.factor_status?.[key] ?? "中性"})`
       );
     });
   } else {
@@ -223,12 +218,6 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
             <span>标记价格</span>
             <b>{formatNumber(point.markerPrice ?? point.price ?? undefined, 2)}</b>
           </div>
-          {typeof point.markerScore === "number" ? (
-            <div className="tooltip-row">
-              <span>标记强度</span>
-              <b>{formatNumber(point.markerScore, 0)}</b>
-            </div>
-          ) : null}
           {point.markerReason ? (
             <div className="tooltip-row">
               <span>原因</span>
@@ -244,7 +233,7 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
       {point.signal ? (
         <div className="tooltip-row">
           <span>信号</span>
-          <b>{point.signal} / {formatNumber(point.score, 0)}</b>
+          <b>{point.signal}</b>
         </div>
       ) : null}
       {factorRows.length > 0 ? (
@@ -255,9 +244,7 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
               <b>
                 {formatNumber(value)}
                 <em>
-                  {point.factor_status?.[key] ?? "中性"} / 打分{" "}
-                  {(point.factor_scores?.[key] ?? 0) > 0 ? "+" : ""}
-                  {formatNumber(point.factor_scores?.[key] ?? 0, 1)}
+                  {point.factor_status?.[key] ?? "中性"}
                 </em>
               </b>
             </div>
@@ -292,9 +279,7 @@ export function IntradayChart({ data, loading = false }: Props) {
     vwap: p.vwap,
     factors: p.factors,
     factor_status: p.factor_status,
-    factor_scores: p.factor_scores,
     signal: p.signal,
-    score: p.score,
     reasons: p.reasons,
   }));
   const pointByTime = new Map(actualData.map((p) => [p.time, p]));
@@ -317,7 +302,6 @@ export function IntradayChart({ data, loading = false }: Props) {
         price: base.price,
         markerSignal: m.signal as "BUY" | "SELL",
         markerPrice: m.price,
-        markerScore: m.score,
         markerReason: m.reason,
       });
     });

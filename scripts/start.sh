@@ -158,7 +158,7 @@ fi
 cd "${APP_ROOT}"
 setup_node_path
 setup_python_bin
-mkdir -p "${RUN_DIR}" "${LOG_DIR}" data
+bash "${APP_ROOT}/scripts/init_prod_dirs.sh"
 
 if ! command -v "${NPM_BIN}" >/dev/null 2>&1; then
   echo "Missing command: ${NPM_BIN}" >&2

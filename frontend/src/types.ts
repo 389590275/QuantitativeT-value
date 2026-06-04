@@ -1,3 +1,13 @@
+export interface VwapThresholdsInfo {
+  avg_amplitude_5d: number;
+  buy_zone_pct: number;
+  extreme_down_pct: number;
+  extreme_up_pct: number;
+  full_deviation_pct: number;
+  bias_status_pct: number;
+  early_session_active?: boolean;
+}
+
 export interface RealtimePayload {
   symbol: string;
   name: string;
@@ -6,19 +16,18 @@ export interface RealtimePayload {
   price: number;
   change_pct: number | null;
   signal: string;
-  score: number;
   reasons: string[];
   factors: Record<string, number>;
   factor_status: Record<string, string>;
-  factor_scores: Record<string, number>;
   vwap: number;
   minute_points: MinutePoint[];
-  signal_marks: { time: string; signal: string; price: number; score?: number; reason?: string }[];
-  pending_buy?: { time: string; signal: string; price: number; score?: number; reason?: string } | null;
+  signal_marks: { time: string; signal: string; price: number; reason?: string }[];
+  pending_buy?: { time: string; signal: string; price: number; reason?: string } | null;
   t0_position?: "flat" | "long";
   buy_count?: number;
   sell_count?: number;
   data_status?: "ok" | "loading" | "synthetic";
+  vwap_thresholds?: VwapThresholdsInfo;
 }
 
 export interface MinutePoint {
@@ -27,9 +36,7 @@ export interface MinutePoint {
   vwap: number;
   factors?: Record<string, number>;
   factor_status?: Record<string, string>;
-  factor_scores?: Record<string, number>;
   signal?: string;
-  score?: number;
   reasons?: string[];
 }
 

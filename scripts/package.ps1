@@ -94,3 +94,5 @@ finally {
 
 Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Package created: $PackagePath"
 Write-Host "Upload it to CentOS, then extract or deploy it under /data/app."
+Write-Host "Production data (SQLite): /data/save/t0.db (set via DB_PATH in packaged .env)."
+Write-Host "After deploy, run: bash /data/app/scripts/init_prod_dirs.sh"

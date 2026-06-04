@@ -147,36 +147,18 @@ class Kdj5mFactor(BaseFactor):
         bottom_golden_cross = bottom_zone and prev_k <= prev_d and k > d
         bottom_turn_up = bottom_zone and j > prev_j and prev_j <= prev2_j
         death_cross = prev_k >= prev_d and k < d
+        top_turn_down = j < prev_j and prev_j >= prev2_j
 
         if bottom_golden_cross or bottom_turn_up:
             status = "强"
         elif death_cross:
-            status = "弱"
+            status = "死叉"
+        elif top_turn_down:
+            status = "拐头向下"
         else:
             status = "中性"
 
         return FactorResult(name=self.name, value=round(j, 2), status=status)
-
-
-def _macd_ths(
-    closes: list[float], short: int = 12, long: int = 26, signal: int = 9
-) -> tuple[float, float, float]:
-    """
-    与同花顺 MACD 一致：
-    DIF = EMA(CLOSE, SHORT) - EMA(CLOSE, LONG)
-    DEA = EMA(DIF, M)
-    MACD柱 = 2 * (DIF - DEA)
-    """
-    if not closes:
-        return 0.0, 0.0, 0.0
-    ema_short = _ema(closes, short)
-    ema_long = _ema(closes, long)
-    dif_series = [a - b for a, b in zip(ema_short, ema_long)]
-    dea_series = _ema(dif_series, signal)
-    dif = dif_series[-1]
-    dea = dea_series[-1]
-    bar = 2.0 * (dif - dea)
-    return dif, dea, bar
 
 
 class MacdFastSlowFactor(BaseFactor):
@@ -204,19 +186,21 @@ class MacdFastSlowFactor(BaseFactor):
         prev2_dif = dif_series[-3]
         prev_dif, prev_dea = dif_series[-2], dea_series[-2]
 
-        # T0 反转：零轴下方金叉或 DIF 拐头向上。
         golden_cross = prev_dif <= prev_dea and dif > dea
-        dif_turn_up = dif > prev_dif and prev_dif <= prev2_dif
-
-        # 零轴上方死叉用于卖点侧判断。
         death_cross = prev_dif >= prev_dea and dif < dea
+        prev_bar = 2.0 * (prev_dif - prev_dea)
+        bar = 2.0 * (dif - dea)
+        bar_turn_up = bar > prev_bar and prev_bar <= 0
+        bar_turn_down = bar < prev_bar and prev_bar >= 0
 
         if golden_cross and dif < 0:
             status = "强"
-        elif death_cross:
-            status = "弱"
-        elif dif_turn_up and dif < 0:
+        elif death_cross and dif > 0:
+            status = "死叉"
+        elif bar_turn_up and dif < 0:
             status = "强"
+        elif bar_turn_down and dif > 0:
+            status = "拐头向下"
         else:
             status = "中性"
 

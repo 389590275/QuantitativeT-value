@@ -178,12 +178,12 @@ need_cmd "${PYTHON_BIN}"
 need_cmd node
 need_cmd "${NPM_BIN}"
 
-mkdir -p data logs run
-
 if [[ ! -f ".env" && -f ".env.example" ]]; then
   log "Creating .env from .env.example"
   cp .env.example .env
 fi
+
+bash "${APP_ROOT}/scripts/init_prod_dirs.sh"
 
 log "Installing Python dependencies"
 "${PYTHON_BIN}" -m pip install -i "${PIP_INDEX_URL}" --upgrade pip setuptools wheel

@@ -15,7 +15,6 @@ export function FactorPanel({ data }: Props) {
     label: FACTOR_LABELS[key] ?? key,
     value,
     status: data.factor_status[key] ?? "中性",
-    score: data.factor_scores?.[key] ?? 0,
     active: ACTIVE_FACTOR_KEYS.has(key),
   }));
 
@@ -28,7 +27,6 @@ export function FactorPanel({ data }: Props) {
             <th>因子</th>
             <th>当前值</th>
             <th>状态</th>
-            <th>打分</th>
           </tr>
         </thead>
         <tbody>
@@ -37,10 +35,18 @@ export function FactorPanel({ data }: Props) {
               key={r.key}
               className={`${r.active ? `status-${r.status}` : "factor-disabled"}`}
             >
-              <td>{r.label}</td>
-              <td>{typeof r.value === "number" ? r.value.toFixed(4) : r.value}</td>
+              <td>
+                {r.label}
+                {r.key === "vwap_bias" && data.vwap_thresholds ? (
+                  <div className="factor-hint">
+                    买点偏离 ≤ -{data.vwap_thresholds.buy_zone_pct.toFixed(2)}%
+                  </div>
+                ) : null}
+              </td>
+              <td>
+                {typeof r.value === "number" ? `${r.value.toFixed(4)}%` : r.value}
+              </td>
               <td>{r.active ? r.status : "停用"}</td>
-              <td>{r.active ? (r.score > 0 ? `+${r.score.toFixed(1)}` : r.score.toFixed(1)) : "—"}</td>
             </tr>
           ))}
         </tbody>

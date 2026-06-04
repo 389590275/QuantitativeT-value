@@ -11,6 +11,18 @@ class OrderBookLevel(BaseModel):
     volume: float = 0.0
 
 
+class VwapThresholdsInfo(BaseModel):
+    """分时买区/超跌阈值：五日平均振幅 ÷ 3 为买区，×4 为超跌。"""
+
+    avg_amplitude_5d: float = 0.6
+    buy_zone_pct: float = 0.2
+    extreme_down_pct: float = 0.8
+    extreme_up_pct: float = 0.8
+    full_deviation_pct: float = 1.2
+    bias_status_pct: float = 0.3
+    early_session_active: bool = False
+
+
 class MarketData(BaseModel):
     symbol: str
     name: str = ""
@@ -31,6 +43,7 @@ class MarketData(BaseModel):
     index_cyb_change: float = 0.0
     northbound_net: float = 0.0
     sector_etf_change: float = 0.0
+    vwap_thresholds: VwapThresholdsInfo = Field(default_factory=VwapThresholdsInfo)
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
@@ -42,7 +55,6 @@ class FactorResult(BaseModel):
 
 class SignalOutput(BaseModel):
     signal: str = "HOLD"
-    score: float = 50.0
     reasons: list[str] = Field(default_factory=list)
 
 
@@ -54,11 +66,9 @@ class RealtimePayload(BaseModel):
     price: float = 0.0
     change_pct: Optional[float] = None
     signal: str = "HOLD"
-    score: float = 50.0
     reasons: list[str] = Field(default_factory=list)
     factors: dict[str, float] = Field(default_factory=dict)
     factor_status: dict[str, str] = Field(default_factory=dict)
-    factor_scores: dict[str, float] = Field(default_factory=dict)
     vwap: float = 0.0
     minute_points: list[dict[str, Any]] = Field(default_factory=list)
     signal_marks: list[dict[str, Any]] = Field(default_factory=list)
@@ -67,3 +77,4 @@ class RealtimePayload(BaseModel):
     buy_count: int = 0
     sell_count: int = 0
     data_status: str = "ok"
+    vwap_thresholds: VwapThresholdsInfo = Field(default_factory=VwapThresholdsInfo)

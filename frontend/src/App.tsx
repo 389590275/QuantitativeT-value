@@ -5,6 +5,7 @@ import { TradeList } from "./components/TradeList";
 import type { RealtimePayload } from "./types";
 import {
   apiClearRecalculate,
+  apiRefreshCache,
   apiSetSymbol,
   apiSetTradeDate,
   useRealtime,
@@ -29,9 +30,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [dateLoading, setDateLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [previewData, setPreviewData] = useState<RealtimePayload | null>(null);
   const [stableChartData, setStableChartData] = useState<RealtimePayload | null>(null);
-  const isPreparingData = loading || dateLoading || clearing;
+  const isPreparingData = loading || dateLoading || clearing || refreshing;
   const isViewingToday = tradeDate === todayString();
   const liveData = data?.trade_date === todayString() ? data : null;
   const isLiveDataLoading = liveData?.data_status === "loading";
@@ -102,6 +104,18 @@ export default function App() {
     }
   };
 
+  const handleRefreshCache = async () => {
+    if (!window.confirm(`确定拉取当前股票 ${tradeDate} 的行情并重新计算吗？`)) {
+      return;
+    }
+    setRefreshing(true);
+    try {
+      await apiRefreshCache(tradeDate);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -147,9 +161,16 @@ export default function App() {
         <button
           className="secondary"
           onClick={handleClearRecalculate}
-          disabled={clearing || !tradeDate}
+          disabled={clearing || refreshing || !tradeDate}
         >
           {clearing ? "清空中…" : "重新计算"}
+        </button>
+        <button
+          className="secondary"
+          onClick={handleRefreshCache}
+          disabled={refreshing || clearing || !tradeDate}
+        >
+          {refreshing ? "拉取中…" : "拉取行情"}
         </button>
       </section>
 
@@ -176,6 +197,19 @@ export default function App() {
             VWAP: {isDisplayDataLoading ? "—" : displayData?.vwap?.toFixed(2) ?? "—"}
             {isSyntheticData ? " · 分钟行情不可用，仅展示日线估算" : ""}
           </p>
+          {displayData?.vwap_thresholds && (
+            <p className="signal-thresholds">
+              买点条件① 低于分时均线{" "}
+              {displayData.vwap_thresholds.buy_zone_pct.toFixed(2)}%
+              {displayData.vwap_thresholds.early_session_active
+                ? "（早盘 9:50–10:10）"
+                : `（五日振幅 ${displayData.vwap_thresholds.avg_amplitude_5d.toFixed(2)}% ÷ 3）`}
+              {" · "}
+              ② MACD 金叉/拐头 或 ③ 5分钟KDJ 金叉/拐头
+              {" · "}
+              卖点：涨1.5% / 死叉 / 涨0.8%且拐头向下
+            </p>
+          )}
           <p className="t0-pair">
             已完成 T0：买 {displayData?.buy_count ?? 0} / 卖 {displayData?.sell_count ?? 0} ✓ 数量相等
             {displayData?.pending_buy ? ` · 待卖出买点 ${displayData.pending_buy.price.toFixed(2)}` : ""}
@@ -184,7 +218,6 @@ export default function App() {
         <div className={`signal-card ${signalClass(displayData?.signal ?? "HOLD")}`}>
           <div className="signal-label">当前信号</div>
           <div className="signal-value">{displayData?.signal ?? "HOLD"}</div>
-          <div className="signal-score">强度 {displayData?.score?.toFixed(0) ?? "—"}</div>
           <ul className="reasons">
             {(displayData?.reasons ?? []).map((r) => (
               <li key={r}>{r}</li>

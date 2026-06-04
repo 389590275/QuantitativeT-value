@@ -9,7 +9,7 @@ QuantitativeT-value/
 ├── backend/          # Python FastAPI 后端
 ├── frontend/         # React + Electron 桌面端
 ├── .env.example      # 配置模板
-└── data/             # SQLite（运行后自动生成）
+└── data/             # 本地 SQLite（运行后自动生成；生产见 DB_PATH）
 ```
 
 ## 环境要求
@@ -71,10 +71,11 @@ npm run electron:dev
 | 模块 | 说明 |
 |------|------|
 | 行情 | AkShare + 东方财富实时行情，约 1 秒轮询 |
-| 因子 | 3 个当前启用因子：分时均线偏离、5分钟KDJ、MACD快慢线差 |
-| 信号 | BUY / SELL / WATCH / HOLD，评分 0–100 |
+| 因子 | 分时偏离、5分钟KDJ、MACD |
+| 买点 | ①低于分时均线（早盘9:50–10:10为0.5%，否则五日振幅÷3）且 ②MACD或③KDJ金叉/拐头 |
+| 卖点 | 距买点涨幅≥1.5%；或 MACD/5分钟KDJ 死叉；或涨幅≥0.8% 且 MACD/5分钟KDJ 拐头向下 |
 | 通知 | 信号首次出现时：桌面通知 + 企微（去重） |
-| 存储 | SQLite 记录 `signals`、`ticks` |
+| 存储 | SQLite（`DB_PATH`）；生产默认 `/data/save/t0.db` |
 
 ## API
 
@@ -83,6 +84,32 @@ npm run electron:dev
 - `POST /api/symbol` — 切换股票 `{"symbol":"600519"}`
 - `POST /api/start` / `POST /api/stop` — 引擎控制
 - `WS /ws/realtime` — 实时推送
+
+## CentOS 生产部署
+
+| 路径 | 用途 |
+|------|------|
+| `/data/app` | 程序代码（打包解压目录） |
+| `/data/save` | SQLite 与持久化数据（`.env` 中 `DB_PATH=/data/save/t0.db`） |
+| `/data/app/logs` | 运行日志 |
+
+```bash
+# 打包（Windows）
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1
+
+# 服务器解压后
+cd /data/app
+bash scripts/init_prod_dirs.sh   # 创建 /data/save 等目录
+bash scripts/install_deps.sh
+bash scripts/start.sh
+```
+
+若此前数据库在 `/data/app/data/t0.db`，迁移示例：
+
+```bash
+mkdir -p /data/save
+cp -a /data/app/data/t0.db /data/save/t0.db
+```
 
 ## 注意事项
 
