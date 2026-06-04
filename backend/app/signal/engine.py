@@ -43,11 +43,11 @@ class SignalEngine:
             reasons.append("5分钟KDJ拐头向下")
 
         if macd_strong:
-            reasons.append("MACD底部金叉/拐头")
+            reasons.append("MACD金叉/即将金叉")
         elif macd_death:
             reasons.append("MACD死叉")
         elif macd_turn_down:
-            reasons.append("MACD拐头向下")
+            reasons.append("MACD即将死叉")
 
         if buy_zone and (macd_strong or kdj_strong):
             return (
@@ -68,7 +68,7 @@ class SignalEngine:
             return (
                 SignalOutput(
                     signal="WATCH",
-                    reasons=reasons[:5] or ["已低于分时均线，等待KDJ/MACD金叉或拐头"],
+                    reasons=reasons[:5] or ["已低于分时均线，等待KDJ金叉/拐头或MACD金叉/即将金叉"],
                 ),
                 {},
             )

@@ -205,7 +205,7 @@ export default function App() {
                 ? "（早盘 9:50–10:10）"
                 : `（五日振幅 ${displayData.vwap_thresholds.avg_amplitude_5d.toFixed(2)}% ÷ 3）`}
               {" · "}
-              ② MACD 金叉/拐头 或 ③ 5分钟KDJ 金叉/拐头
+              ② MACD 金叉/即将金叉 或 ③ 5分钟KDJ 金叉/拐头
               {" · "}
               卖点：涨1.5% / 死叉 / 涨0.8%且拐头向下
             </p>

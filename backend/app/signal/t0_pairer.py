@@ -201,4 +201,7 @@ class T0SignalPairer:
 
     @staticmethod
     def _has_turn_down(raw: SignalOutput) -> bool:
-        return any("拐头向下" in reason for reason in raw.reasons)
+        return any(
+            "拐头向下" in reason or "即将死叉" in reason
+            for reason in raw.reasons
+        )

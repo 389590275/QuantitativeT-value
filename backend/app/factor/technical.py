@@ -183,23 +183,37 @@ class MacdFastSlowFactor(BaseFactor):
         if len(dif_series) < 3:
             return FactorResult(name=self.name, value=round(dif, 4), status="中性")
 
-        prev2_dif = dif_series[-3]
+        prev2_dif, prev2_dea = dif_series[-3], dea_series[-3]
         prev_dif, prev_dea = dif_series[-2], dea_series[-2]
 
         golden_cross = prev_dif <= prev_dea and dif > dea
         death_cross = prev_dif >= prev_dea and dif < dea
-        prev_bar = 2.0 * (prev_dif - prev_dea)
-        bar = 2.0 * (dif - dea)
-        bar_turn_up = bar > prev_bar and prev_bar <= 0
-        bar_turn_down = bar < prev_bar and prev_bar >= 0
+        prev2_golden_gap = prev2_dea - prev2_dif
+        prev_golden_gap = prev_dea - prev_dif
+        golden_gap = dea - dif
+        impending_golden_cross = (
+            dif < dea
+            and prev_dif < prev_dea
+            and prev2_dif < prev2_dea
+            and 0 < golden_gap < prev_golden_gap < prev2_golden_gap
+        )
+        prev2_death_gap = prev2_dif - prev2_dea
+        prev_death_gap = prev_dif - prev_dea
+        death_gap = dif - dea
+        impending_death_cross = (
+            dif > dea
+            and prev_dif > prev_dea
+            and prev2_dif > prev2_dea
+            and 0 < death_gap < prev_death_gap < prev2_death_gap
+        )
 
         if golden_cross and dif < 0:
             status = "强"
         elif death_cross and dif > 0:
             status = "死叉"
-        elif bar_turn_up and dif < 0:
+        elif impending_golden_cross and dif < 0:
             status = "强"
-        elif bar_turn_down and dif > 0:
+        elif impending_death_cross and dif > 0:
             status = "拐头向下"
         else:
             status = "中性"
