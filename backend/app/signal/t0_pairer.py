@@ -9,7 +9,7 @@ from app.models.schemas import SignalOutput
 _LAST_BUY_TIME = time(14, 50)
 _FORCE_CLOSE_TIME = time(14, 54)
 _MARKET_CLOSE_TIME = time(15, 0)
-_TAKE_PROFIT_RATIO = 0.015
+_TAKE_PROFIT_RATIO = 0.01
 _TURN_DOWN_PROFIT_RATIO = 0.008
 
 
@@ -111,13 +111,13 @@ class T0SignalPairer:
                 gain_pct = (price - buy_price) / buy_price * 100
                 raw = SignalOutput(
                     signal="SELL",
-                    reasons=[f"距买点涨幅{gain_pct:.2f}%达到1.5%止盈"] + raw.reasons[:3],
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%达到1%止盈"] + raw.reasons[:3],
                 )
             elif raw.signal != "SELL" and gain_ratio >= _TURN_DOWN_PROFIT_RATIO and turn_down:
                 gain_pct = (price - buy_price) / buy_price * 100
                 raw = SignalOutput(
                     signal="SELL",
-                    reasons=[f"距买点涨幅{gain_pct:.2f}%且指标拐头向下"] + raw.reasons[:3],
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%且MACDFS即将死叉"] + raw.reasons[:3],
                 )
 
         if raw.signal == "BUY" and self._position == "flat" and now.time() >= _LAST_BUY_TIME:

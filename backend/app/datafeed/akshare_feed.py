@@ -375,7 +375,7 @@ class AkshareDataFeed:
                 )
             return bars
         except Exception as e:
-            logger.warning("minute alt: %s", e)
+            logger.debug("minute alt unavailable: %s", e)
             return []
 
     def _fetch_minute_bars_for_date(

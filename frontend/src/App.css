@@ -277,6 +277,15 @@ input {
   border-bottom: 1px solid #2d3a4d;
 }
 
+.trade-list tbody tr {
+  cursor: pointer;
+}
+
+.trade-list tbody tr:hover,
+.trade-list tbody tr.selected {
+  background: rgba(96, 165, 250, 0.1);
+}
+
 .trade-BUY td:nth-child(2) {
   color: var(--buy);
   font-weight: 700;
@@ -300,6 +309,39 @@ input {
   margin: 0;
 }
 
+.trade-detail {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid #334155;
+  font-size: 0.85rem;
+}
+
+.trade-detail-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.trade-detail-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.trade-detail-row span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.trade-detail-row b {
+  text-align: right;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .factor-panel th,
 .factor-panel td {
   text-align: left;
@@ -307,8 +349,14 @@ input {
   border-bottom: 1px solid #2d3a4d;
 }
 
-.status-强 td:last-child {
+.status-强 td:last-child,
+.status-水下金叉 td:last-child,
+.status-即将金叉 td:last-child {
   color: var(--buy);
+}
+
+.status-未预热 td:last-child {
+  color: var(--muted);
 }
 
 .status-低位 td:last-child,
@@ -316,7 +364,9 @@ input {
   color: var(--buy);
 }
 
-.status-弱 td:last-child {
+.status-弱 td:last-child,
+.status-死叉 td:last-child,
+.status-拐头向下 td:last-child {
   color: var(--sell);
 }
 

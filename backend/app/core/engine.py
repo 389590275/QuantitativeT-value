@@ -314,6 +314,7 @@ class TradingEngine:
             trade_date=trade_date,
             quote_time=self._normalize_point_time(str(md.minute_bars[-1].get("time", ""))) or md.timestamp.strftime("%H:%M:%S"),
             price=md.price,
+            prev_close=md.prev_close,
             change_pct=md.change_pct,
             signal=latest_signal.signal,
             reasons=latest_signal.reasons,
@@ -349,6 +350,7 @@ class TradingEngine:
             trade_date=trade_date,
             quote_time="",
             signal="HOLD",
+            prev_close=0.0,
             reasons=[reason],
             minute_points=[],
             signal_marks=[],
@@ -398,6 +400,9 @@ class TradingEngine:
 
     def _tick_sync_locked(self) -> None:
         if self.trade_date != self._today():
+            return
+        if not self._is_trading_time(datetime.now()):
+            self._publish_offhours_snapshot_locked()
             return
         md = self.datafeed.fetch_quote(self.symbol)
         if md is not None:
@@ -504,6 +509,7 @@ class TradingEngine:
             trade_date=self.trade_date,
             quote_time=self._normalize_point_time(bar_time or md.timestamp.strftime("%H:%M:%S")),
             price=md.price,
+            prev_close=md.prev_close,
             change_pct=md.change_pct,
             signal=signal.signal,
             reasons=signal.reasons,
@@ -712,14 +718,44 @@ class TradingEngine:
             self.unsubscribe(q)
 
     async def _notify_wecom(self, payload: RealtimePayload) -> None:
+        price_change = self._format_change_pct(payload.price, payload.prev_close)
+        vwap_bias = self._format_vwap_bias(payload.price, payload.vwap)
+        buy_threshold = payload.vwap_thresholds.buy_zone_pct
+        macdfs_df = payload.factors.get("macd_fs")
+        macdfs_status = payload.factor_status.get("macd_fs", "—")
+        kdj_j = payload.factors.get("kdj_5m")
+        kdj_status = payload.factor_status.get("kdj_5m", "—")
         content = (
             f"**股票**: {payload.name} ({payload.symbol})\n"
             f"**信号**: {payload.signal}\n"
-            f"**价格**: {payload.price}\n"
+            f"**价格**: {payload.price} ({price_change})\n"
             f"**今日**: 买{payload.buy_count} / 卖{payload.sell_count}\n"
+            f"**距分时均线**: {vwap_bias} / 买点阈值 -{buy_threshold:.2f}%\n"
+            f"**MACDFS DF**: {self._format_optional_float(macdfs_df, 4)} ({macdfs_status})\n"
+            f"**5分钟KDJ J**: {self._format_optional_float(kdj_j, 2)} ({kdj_status})\n"
             f"**原因**: {', '.join(payload.reasons)}"
         )
         await send_wecom("T0 交易信号", content)
+
+    @staticmethod
+    def _format_optional_float(value: float | None, digits: int) -> str:
+        if value is None:
+            return "—"
+        return f"{value:.{digits}f}"
+
+    @staticmethod
+    def _format_change_pct(price: float, prev_close: float) -> str:
+        if prev_close <= 0:
+            return "—"
+        pct = (price / prev_close - 1) * 100
+        return f"{pct:+.2f}%"
+
+    @staticmethod
+    def _format_vwap_bias(price: float, vwap: float) -> str:
+        if vwap <= 0:
+            return "—"
+        pct = (price - vwap) / vwap * 100
+        return f"{pct:+.2f}%"
 
 
 engine = TradingEngine()

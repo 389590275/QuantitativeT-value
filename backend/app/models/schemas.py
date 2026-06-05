@@ -64,6 +64,7 @@ class RealtimePayload(BaseModel):
     trade_date: str = ""
     quote_time: str = ""
     price: float = 0.0
+    prev_close: float = 0.0
     change_pct: Optional[float] = None
     signal: str = "HOLD"
     reasons: list[str] = Field(default_factory=list)

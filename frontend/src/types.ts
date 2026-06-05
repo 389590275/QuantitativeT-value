@@ -14,6 +14,7 @@ export interface RealtimePayload {
   trade_date?: string;
   quote_time?: string;
   price: number;
+  prev_close?: number;
   change_pct: number | null;
   signal: string;
   reasons: string[];
@@ -43,7 +44,7 @@ export interface MinutePoint {
 export const FACTOR_LABELS: Record<string, string> = {
   vwap_bias: "分时均线偏离",
   kdj_5m: "5分钟KDJ",
-  macd_fs: "MACD快慢线差",
+  macd_fs: "MACDFS分时",
 };
 
 export const ACTIVE_FACTOR_KEYS = new Set([
