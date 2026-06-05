@@ -25,7 +25,7 @@ function todayString() {
 
 export default function App() {
   const { data, connected } = useRealtime();
-  const [symbolInput, setSymbolInput] = useState("600519");
+  const [symbolInput, setSymbolInput] = useState("600938");
   const [tradeDate, setTradeDate] = useState(todayString());
   const [loading, setLoading] = useState(false);
   const [dateLoading, setDateLoading] = useState(false);
@@ -129,7 +129,7 @@ export default function App() {
         <input
           value={symbolInput}
           onChange={(e) => setSymbolInput(e.target.value)}
-          placeholder="股票代码，如 600519"
+          placeholder="股票代码，如 600938"
           maxLength={6}
         />
         <button onClick={handleSetSymbol} disabled={loading}>
@@ -201,9 +201,7 @@ export default function App() {
             <p className="signal-thresholds">
               买点条件① 低于分时均线{" "}
               {displayData.vwap_thresholds.buy_zone_pct.toFixed(2)}%
-              {displayData.vwap_thresholds.early_session_active
-                ? "（早盘 9:50–10:10）"
-                : `（五日振幅 ${displayData.vwap_thresholds.avg_amplitude_5d.toFixed(2)}% ÷ 3）`}
+              （固定阈值）
               {" · "}
               ② MACD 金叉/即将金叉 或 ③ 5分钟KDJ 金叉/拐头
               {" · "}

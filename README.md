@@ -27,7 +27,7 @@ copy .env.example .env
 
 编辑 `.env`：
 
-- `SYMBOL`：监控股票代码（如 `600519`）
+- `SYMBOL`：监控股票代码（如 `600938`）
 - `SECTOR_ETF`：行业 ETF（因子9，默认 `512880`）
 - `WECOM_WEBHOOK`：企业微信机器人地址（可选）
 
@@ -72,7 +72,7 @@ npm run electron:dev
 |------|------|
 | 行情 | AkShare + 东方财富实时行情，约 1 秒轮询 |
 | 因子 | 分时偏离、5分钟KDJ、MACD |
-| 买点 | ①低于分时均线（早盘9:50–10:10为0.5%，否则五日振幅÷3）且 ②MACD金叉/即将金叉 或 ③KDJ金叉/拐头 |
+| 买点 | ①低于分时均线固定 0.5% 且 ②MACD金叉/即将金叉 或 ③KDJ金叉/拐头 |
 | 卖点 | 距买点涨幅≥1.5%；或 MACD/5分钟KDJ 死叉；或涨幅≥0.8% 且 MACD即将死叉或5分钟KDJ拐头向下 |
 | 通知 | 信号首次出现时：桌面通知 + 企微（去重） |
 | 存储 | SQLite（`DB_PATH`）；生产默认 `/data/save/t0.db` |
@@ -81,7 +81,7 @@ npm run electron:dev
 
 - `GET /api/health` — 健康检查
 - `GET /api/status` — 当前状态
-- `POST /api/symbol` — 切换股票 `{"symbol":"600519"}`
+- `POST /api/symbol` — 切换股票 `{"symbol":"600938"}`
 - `POST /api/start` / `POST /api/stop` — 引擎控制
 - `WS /ws/realtime` — 实时推送
 

@@ -29,6 +29,13 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
     try:
         if pd.isna(val):
             return default
+        if isinstance(val, str):
+            text = val.strip().replace(",", "")
+            if text.endswith("%"):
+                text = text[:-1]
+            if text in ("", "-", "--", "None", "nan"):
+                return default
+            return float(text)
         return float(val)
     except (TypeError, ValueError):
         return default
@@ -37,7 +44,7 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 class AkshareDataFeed:
     def __init__(self) -> None:
         self._name_cache: dict[str, str] = {}
-        self._prev_close_cache: dict[str, float] = {}
+        self._prev_close_cache: dict[str, tuple[str, float]] = {}
 
     def get_avg_amplitude_5d(self, symbol: str, trade_date: str) -> float:
         """最近 5 个已完成交易日的日振幅均值（%）。"""
@@ -117,10 +124,77 @@ class AkshareDataFeed:
             logger.warning("get_stock_name failed: %s", e)
         return symbol
 
+    def _fetch_realtime_quote(self, symbol: str) -> dict[str, float | str]:
+        """东方财富单股实时快照；优先用于最新价、涨幅和昨收。"""
+        try:
+            df = ak.stock_bid_ask_em(symbol=symbol)
+            if df is not None and not df.empty:
+                data = {
+                    str(row.get("item", "")).strip(): row.get("value")
+                    for _, row in df.iterrows()
+                }
+                buy1 = self._first_float(data, "buy_1", "买一")
+                sell1 = self._first_float(data, "sell_1", "卖一")
+                price = self._first_float(
+                    data, "最新", "最新价", "current_price", "price", "last", "new_price"
+                )
+                if price <= 0 and buy1 > 0 and sell1 > 0:
+                    price = (buy1 + sell1) / 2.0
+                prev_close = self._first_float(
+                    data, "昨收", "昨日收盘", "pre_close", "prev_close"
+                )
+                change_pct = self._first_float(
+                    data, "涨幅", "涨跌幅", "change_pct", "change_percent"
+                )
+                return {
+                    "price": price,
+                    "prev_close": prev_close,
+                    "change_pct": change_pct,
+                    "open": self._first_float(data, "今开", "开盘"),
+                    "high": self._first_float(data, "最高"),
+                    "low": self._first_float(data, "最低"),
+                    "volume": self._first_float(data, "总手", "成交量"),
+                    "amount": self._first_float(data, "金额", "成交额"),
+                }
+        except Exception as e:
+            logger.debug("realtime bid_ask unavailable: %s", e)
+
+        try:
+            df = ak.stock_zh_a_spot_em()
+            if df is None or df.empty:
+                return {}
+            rows = df[df["代码"].astype(str).str.zfill(6) == symbol.zfill(6)]
+            if rows.empty:
+                return {}
+            row = rows.iloc[0]
+            return {
+                "price": _safe_float(row.get("最新价")),
+                "prev_close": _safe_float(row.get("昨收")),
+                "change_pct": _safe_float(row.get("涨跌幅")),
+                "open": _safe_float(row.get("今开")),
+                "high": _safe_float(row.get("最高")),
+                "low": _safe_float(row.get("最低")),
+                "volume": _safe_float(row.get("成交量")),
+                "amount": _safe_float(row.get("成交额")),
+                "name": str(row.get("名称", "") or ""),
+            }
+        except Exception as e:
+            logger.debug("realtime spot unavailable: %s", e)
+        return {}
+
+    @staticmethod
+    def _first_float(data: dict[str, Any], *keys: str) -> float:
+        for key in keys:
+            value = _safe_float(data.get(key))
+            if value > 0 or key in ("涨幅", "涨跌幅"):
+                return value
+        return 0.0
+
     def _get_prev_close(self, symbol: str, price: float = 0.0) -> float:
+        today = datetime.now().strftime("%Y-%m-%d")
         if symbol in self._prev_close_cache:
-            cached = self._prev_close_cache[symbol]
-            if self._is_reasonable_prev_close(cached, price):
+            cached_date, cached = self._prev_close_cache[symbol]
+            if cached_date == today and self._is_reasonable_prev_close(cached, price):
                 return cached
         try:
             df = ak.stock_individual_info_em(symbol=symbol)
@@ -128,14 +202,14 @@ class AkshareDataFeed:
             if not row.empty:
                 val = _safe_float(row.iloc[0]["value"])
                 if self._is_reasonable_prev_close(val, price):
-                    self._prev_close_cache[symbol] = val
+                    self._prev_close_cache[symbol] = (today, val)
                     return val
         except Exception as e:
             logger.warning("prev_close: %s", e)
 
         val = self._get_prev_close_from_daily(symbol)
         if self._is_reasonable_prev_close(val, price):
-            self._prev_close_cache[symbol] = val
+            self._prev_close_cache[symbol] = (today, val)
             return val
         return 0.0
 
@@ -150,23 +224,36 @@ class AkshareDataFeed:
             minute_bars = self._add_intraday_avg(minute_bars)
 
             last = minute_bars[-1]
-            price = _safe_float(last.get("close"))
-            volume = _safe_float(last.get("volume"))
-            amount = _safe_float(last.get("amount"))
-            prev_close = self._get_prev_close(symbol, price)
-            change_pct = (price / prev_close - 1) * 100 if prev_close > 0 else None
+            quote = self._fetch_realtime_quote(symbol)
+            minute_price = _safe_float(last.get("close"))
+            quote_price = _safe_float(quote.get("price"))
+            price = quote_price if quote_price > 0 else minute_price
+            volume = _safe_float(quote.get("volume"), _safe_float(last.get("volume")))
+            amount = _safe_float(quote.get("amount"), _safe_float(last.get("amount")))
+            prev_close = _safe_float(quote.get("prev_close"))
+            if not self._is_reasonable_prev_close(prev_close, price):
+                prev_close = self._get_prev_close(symbol, price)
+            quote_change_pct = _safe_float(quote.get("change_pct"), default=float("nan"))
+            change_pct = (
+                quote_change_pct
+                if not pd.isna(quote_change_pct)
+                else (price / prev_close - 1) * 100 if prev_close > 0 else None
+            )
 
             vwap = self._calc_vwap(minute_bars, price, amount, volume)
 
             highs = [_safe_float(b.get("high"), _safe_float(b.get("close"))) for b in minute_bars]
             lows = [_safe_float(b.get("low"), _safe_float(b.get("close"))) for b in minute_bars]
+            quote_high = _safe_float(quote.get("high"))
+            quote_low = _safe_float(quote.get("low"))
+            quote_open = _safe_float(quote.get("open"))
             return MarketData(
                 symbol=symbol,
-                name=self.get_stock_name(symbol),
+                name=str(quote.get("name") or "") or self.get_stock_name(symbol),
                 price=price,
-                open=_safe_float(minute_bars[0].get("close")),
-                high=max(highs) if highs else price,
-                low=min(lows) if lows else price,
+                open=quote_open if quote_open > 0 else _safe_float(minute_bars[0].get("open"), _safe_float(minute_bars[0].get("close"))),
+                high=quote_high if quote_high > 0 else max(highs) if highs else price,
+                low=quote_low if quote_low > 0 else min(lows) if lows else price,
                 prev_close=prev_close,
                 volume=volume,
                 amount=amount,
@@ -244,9 +331,24 @@ class AkshareDataFeed:
             return None
 
     def _fetch_minute_bars(self, symbol: str) -> list[dict[str, Any]]:
-        return self._fetch_minute_bars_for_date(
-            symbol, datetime.now().strftime("%Y-%m-%d")
-        )
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+        start = f"{trade_date} 09:30:00"
+        end = f"{trade_date} 15:00:00"
+        try:
+            df = ak.stock_zh_a_hist_min_em(
+                symbol=symbol,
+                start_date=start,
+                end_date=end,
+                period="1",
+                adjust="",
+            )
+            bars = self._bars_from_minute_df(df, trade_date)
+            if bars:
+                return bars
+        except Exception as e:
+            logger.debug("realtime minute em unavailable: %s", e)
+
+        return self._fetch_minute_bars_alt(symbol)
 
     def _fetch_minute_bars_alt(self, symbol: str) -> list[dict[str, Any]]:
         try:

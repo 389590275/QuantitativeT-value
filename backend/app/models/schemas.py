@@ -12,14 +12,14 @@ class OrderBookLevel(BaseModel):
 
 
 class VwapThresholdsInfo(BaseModel):
-    """分时买区/超跌阈值：五日平均振幅 ÷ 3 为买区，×4 为超跌。"""
+    """分时买点阈值。"""
 
     avg_amplitude_5d: float = 0.6
-    buy_zone_pct: float = 0.2
-    extreme_down_pct: float = 0.8
-    extreme_up_pct: float = 0.8
-    full_deviation_pct: float = 1.2
-    bias_status_pct: float = 0.3
+    buy_zone_pct: float = 0.5
+    extreme_down_pct: float = 2.0
+    extreme_up_pct: float = 2.0
+    full_deviation_pct: float = 0.5
+    bias_status_pct: float = 0.75
     early_session_active: bool = False
 
 

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    symbol: str = "600519"
+    symbol: str = "600938"
     sector_etf: str = "512880"
     wecom_webhook: str = ""
     quote_interval: float = 1.0

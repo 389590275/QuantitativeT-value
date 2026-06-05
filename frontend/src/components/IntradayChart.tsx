@@ -162,11 +162,26 @@ function formatNumber(value: number | undefined, digits = 4): string {
   return value.toFixed(digits);
 }
 
+function formatVwapBias(price: number | null | undefined, vwap: number | null | undefined): string {
+  if (
+    typeof price !== "number" ||
+    Number.isNaN(price) ||
+    typeof vwap !== "number" ||
+    Number.isNaN(vwap) ||
+    vwap <= 0
+  ) {
+    return "—";
+  }
+  const bias = ((price - vwap) / vwap) * 100;
+  return `${bias >= 0 ? "+" : ""}${bias.toFixed(2)}%`;
+}
+
 function markerTitle(marker: MarkerPoint): string {
   const title = [
     `${marker.markerSignal === "BUY" ? "买点" : "卖点"} ${marker.time}`,
     `价格: ${formatNumber(marker.markerPrice ?? marker.price ?? undefined, 2)}`,
     `分时均线: ${formatNumber(marker.vwap ?? undefined, 2)}`,
+    `距分时均线: ${formatVwapBias(marker.markerPrice ?? marker.price, marker.vwap)}`,
     `原因: ${marker.markerReason ?? "—"}`,
   ];
 
@@ -229,6 +244,10 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
       <div className="tooltip-row">
         <span>分时均线</span>
         <b>{formatNumber(point.vwap ?? undefined, 2)}</b>
+      </div>
+      <div className="tooltip-row">
+        <span>距分时均线</span>
+        <b>{formatVwapBias(point.price, point.vwap)}</b>
       </div>
       {point.signal ? (
         <div className="tooltip-row">
