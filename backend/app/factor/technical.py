@@ -158,67 +158,66 @@ class Kdj5mFactor(BaseFactor):
 
 
 class MacdFastSlowFactor(BaseFactor):
-    name = "MACDFS分时"
+    name = "MACD快慢线差"
     key = "macd_fs"
 
     def calculate(self, market_data: MarketData) -> FactorResult:
-        new_prices = [
-            _to_float(t.get("price"))
-            for t in market_data.tick_history
-            if _to_float(t.get("price")) > 0
+        today_closes = [
+            _to_float(b.get("close"))
+            for b in market_data.minute_bars
+            if _to_float(b.get("close")) > 0
         ]
-        if len(new_prices) < 26 + 6 + 2:
-            # 历史回放没有逐秒 tick，用 1 分钟收盘价近似分时 NEW 序列。
-            new_prices = [
-                _to_float(b.get("close"))
-                for b in market_data.minute_bars
-                if _to_float(b.get("close")) > 0
-            ]
-        if len(new_prices) < 26 + 6 + 2:
+        prev_closes = [
+            _to_float(b.get("close"))
+            for b in market_data.prev_minute_bars
+            if _to_float(b.get("close")) > 0
+        ]
+        closes = prev_closes + today_closes if len(today_closes) < 26 + 9 + 2 else today_closes
+        if not today_closes or len(closes) < 26 + 9 + 2:
             return FactorResult(name=self.name, value=0.0, status="未预热")
 
-        ema_short = _ema(new_prices, 12)
-        ema_long = _ema(new_prices, 26)
-        df_series = [a - b for a, b in zip(ema_short, ema_long)]
-        da_series = _ema(df_series, 6)
-        df = df_series[-1]
-        da = da_series[-1]
-        if len(df_series) < 3:
-            return FactorResult(name=self.name, value=round(df, 4), status="中性")
+        ema_short = _ema(closes, 12)
+        ema_long = _ema(closes, 26)
+        dif_series = [a - b for a, b in zip(ema_short, ema_long)]
+        dea_series = _ema(dif_series, 9)
+        dif = dif_series[-1]
+        dea = dea_series[-1]
+        if len(dif_series) < 3:
+            return FactorResult(name=self.name, value=round(dif, 4), status="中性")
 
-        prev2_df, prev2_da = df_series[-3], da_series[-3]
-        prev_df, prev_da = df_series[-2], da_series[-2]
+        prev2_dif, prev2_dea = dif_series[-3], dea_series[-3]
+        prev_dif, prev_dea = dif_series[-2], dea_series[-2]
 
-        golden_cross = prev_df <= prev_da and df > da
-        death_cross = prev_df >= prev_da and df < da
-        prev2_golden_gap = prev2_da - prev2_df
-        prev_golden_gap = prev_da - prev_df
-        golden_gap = da - df
+        golden_cross = prev_dif <= prev_dea and dif > dea
+        death_cross = prev_dif >= prev_dea and dif < dea
+        prev2_golden_gap = prev2_dea - prev2_dif
+        prev_golden_gap = prev_dea - prev_dif
+        golden_gap = dea - dif
         impending_golden_cross = (
-            df < da
-            and prev_df < prev_da
-            and prev2_df < prev2_da
+            dif < dea
+            and prev_dif < prev_dea
+            and prev2_dif < prev2_dea
             and 0 < golden_gap < prev_golden_gap < prev2_golden_gap
         )
-        prev2_death_gap = prev2_df - prev2_da
-        prev_death_gap = prev_df - prev_da
-        death_gap = df - da
+        prev2_death_gap = prev2_dif - prev2_dea
+        prev_death_gap = prev_dif - prev_dea
+        death_gap = dif - dea
         impending_death_cross = (
-            df > da
-            and prev_df > prev_da
-            and prev2_df > prev2_da
+            dif > dea
+            and prev_dif > prev_dea
+            and prev2_dif > prev2_dea
             and 0 < death_gap < prev_death_gap < prev2_death_gap
         )
 
-        if golden_cross and df < 0:
-            status = "水下金叉"
-        elif death_cross and df > 0:
+        if golden_cross:
+            status = "金叉"
+        elif death_cross and dif > 0:
             status = "死叉"
-        elif impending_golden_cross and df < 0:
+        elif impending_golden_cross:
             status = "即将金叉"
-        elif impending_death_cross and df > 0:
-            status = "拐头向下"
+        elif impending_death_cross and dif > 0:
+            status = "即将死叉"
         else:
             status = "中性"
 
-        return FactorResult(name=self.name, value=round(df, 4), status=status)
+        return FactorResult(name=self.name, value=round(dif, 4), status=status)

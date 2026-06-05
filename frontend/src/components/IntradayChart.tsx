@@ -176,7 +176,7 @@ function formatVwapBias(price: number | null | undefined, vwap: number | null | 
   return `${bias >= 0 ? "+" : ""}${bias.toFixed(2)}%`;
 }
 
-function macdfsDf(point: Pick<ChartPoint, "factors">): number | undefined {
+function macdDif(point: Pick<ChartPoint, "factors">): number | undefined {
   const value = point.factors?.macd_fs;
   return typeof value === "number" && !Number.isNaN(value) ? value : undefined;
 }
@@ -187,7 +187,7 @@ function markerTitle(marker: MarkerPoint): string {
     `价格: ${formatNumber(marker.markerPrice ?? marker.price ?? undefined, 2)}`,
     `分时均线: ${formatNumber(marker.vwap ?? undefined, 2)}`,
     `距分时均线: ${formatVwapBias(marker.markerPrice ?? marker.price, marker.vwap)}`,
-    `MACDFS DF: ${formatNumber(macdfsDf(marker), 4)}`,
+    `1分MACD DIF: ${formatNumber(macdDif(marker), 4)}`,
     `原因: ${marker.markerReason ?? "—"}`,
   ];
 
@@ -256,8 +256,8 @@ function FactorTooltip(props: { active?: boolean; payload?: Array<{ payload: Cha
         <b>{formatVwapBias(point.price, point.vwap)}</b>
       </div>
       <div className="tooltip-row">
-        <span>MACDFS DF</span>
-        <b>{formatNumber(macdfsDf(point), 4)}</b>
+        <span>1分MACD DIF</span>
+        <b>{formatNumber(macdDif(point), 4)}</b>
       </div>
       {point.signal ? (
         <div className="tooltip-row">

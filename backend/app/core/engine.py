@@ -632,6 +632,7 @@ class TradingEngine:
             bid1=source.bid1,
             ask1=source.ask1,
             minute_bars=partial_bars,
+            prev_minute_bars=source.prev_minute_bars,
             vwap=float(current_bar.get("vwap", price) or price),
             index_hs300_change=source.index_hs300_change,
             index_cyb_change=source.index_cyb_change,
@@ -721,8 +722,8 @@ class TradingEngine:
         price_change = self._format_change_pct(payload.price, payload.prev_close)
         vwap_bias = self._format_vwap_bias(payload.price, payload.vwap)
         buy_threshold = payload.vwap_thresholds.buy_zone_pct
-        macdfs_df = payload.factors.get("macd_fs")
-        macdfs_status = payload.factor_status.get("macd_fs", "—")
+        macd_dif = payload.factors.get("macd_fs")
+        macd_status = payload.factor_status.get("macd_fs", "—")
         kdj_j = payload.factors.get("kdj_5m")
         kdj_status = payload.factor_status.get("kdj_5m", "—")
         content = (
@@ -731,7 +732,7 @@ class TradingEngine:
             f"**价格**: {payload.price} ({price_change})\n"
             f"**今日**: 买{payload.buy_count} / 卖{payload.sell_count}\n"
             f"**距分时均线**: {vwap_bias} / 买点阈值 -{buy_threshold:.2f}%\n"
-            f"**MACDFS DF**: {self._format_optional_float(macdfs_df, 4)} ({macdfs_status})\n"
+            f"**1分MACD DIF**: {self._format_optional_float(macd_dif, 4)} ({macd_status})\n"
             f"**5分钟KDJ J**: {self._format_optional_float(kdj_j, 2)} ({kdj_status})\n"
             f"**原因**: {', '.join(payload.reasons)}"
         )

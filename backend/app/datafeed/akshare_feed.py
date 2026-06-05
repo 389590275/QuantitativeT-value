@@ -45,6 +45,7 @@ class AkshareDataFeed:
     def __init__(self) -> None:
         self._name_cache: dict[str, str] = {}
         self._prev_close_cache: dict[str, tuple[str, float]] = {}
+        self._prev_minute_bars_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def get_avg_amplitude_5d(self, symbol: str, trade_date: str) -> float:
         """最近 5 个已完成交易日的日振幅均值（%）。"""
@@ -74,6 +75,27 @@ class AkshareDataFeed:
         self, symbol: str, trade_date: str
     ) -> VwapThresholdsInfo:
         return build_vwap_thresholds(self.get_avg_amplitude_5d(symbol, trade_date))
+
+    def _get_prev_minute_bars(self, symbol: str, trade_date: str) -> list[dict[str, Any]]:
+        cache_key = (symbol, trade_date)
+        if cache_key in self._prev_minute_bars_cache:
+            return list(self._prev_minute_bars_cache[cache_key])
+
+        prev_trade_date = self.find_shifted_trade_date(symbol, trade_date, -1)
+        if not prev_trade_date:
+            self._prev_minute_bars_cache[cache_key] = []
+            return []
+
+        bars = self._valid_minute_bars(get_cached_minute_bars(symbol, prev_trade_date))
+        if not bars:
+            bars = self._valid_minute_bars(
+                self._fetch_minute_bars_for_date(symbol, prev_trade_date)
+            )
+            if bars and not any(bar.get("synthetic") for bar in bars):
+                save_cached_minute_bars(symbol, prev_trade_date, bars)
+        bars = self._add_intraday_avg(bars) if bars else []
+        self._prev_minute_bars_cache[cache_key] = bars
+        return list(bars)
 
     @staticmethod
     def _daily_amplitude_pct(row: Any, prev_row: Any) -> float:
@@ -215,6 +237,7 @@ class AkshareDataFeed:
 
     def fetch_quote(self, symbol: str) -> MarketData | None:
         try:
+            trade_date = datetime.now().strftime("%Y-%m-%d")
             minute_bars = self._fetch_minute_bars(symbol)
             if not minute_bars:
                 minute_bars = self._fetch_minute_bars_alt(symbol)
@@ -259,6 +282,7 @@ class AkshareDataFeed:
                 amount=amount,
                 change_pct=change_pct,
                 minute_bars=minute_bars,
+                prev_minute_bars=self._get_prev_minute_bars(symbol, trade_date),
                 vwap=vwap,
                 timestamp=datetime.now(),
             )
@@ -323,6 +347,7 @@ class AkshareDataFeed:
                 bid1=OrderBookLevel(price=price),
                 ask1=OrderBookLevel(price=price),
                 minute_bars=minute_bars,
+                prev_minute_bars=self._get_prev_minute_bars(symbol, trade_date),
                 vwap=_safe_float(last.get("vwap"), price),
                 timestamp=timestamp,
             )

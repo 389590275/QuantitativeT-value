@@ -117,7 +117,7 @@ class T0SignalPairer:
                 gain_pct = (price - buy_price) / buy_price * 100
                 raw = SignalOutput(
                     signal="SELL",
-                    reasons=[f"距买点涨幅{gain_pct:.2f}%且MACDFS即将死叉"] + raw.reasons[:3],
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%且1分MACD即将死叉"] + raw.reasons[:3],
                 )
 
         if raw.signal == "BUY" and self._position == "flat" and now.time() >= _LAST_BUY_TIME:

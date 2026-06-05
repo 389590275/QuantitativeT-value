@@ -37,6 +37,7 @@ class MarketData(BaseModel):
     bid1: OrderBookLevel = Field(default_factory=OrderBookLevel)
     ask1: OrderBookLevel = Field(default_factory=OrderBookLevel)
     minute_bars: list[dict[str, Any]] = Field(default_factory=list)
+    prev_minute_bars: list[dict[str, Any]] = Field(default_factory=list)
     tick_history: list[dict[str, Any]] = Field(default_factory=list)
     vwap: float = 0.0
     index_hs300_change: float = 0.0

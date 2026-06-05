@@ -203,9 +203,9 @@ export default function App() {
               {displayData.vwap_thresholds.buy_zone_pct.toFixed(2)}%
               （固定阈值）
               {" · "}
-              且（MACDFS水下金叉/即将金叉 或 5分钟KDJ J&lt;20）
+              且（1分MACD DIF&lt;-0.07且金叉/即将金叉，或MACD未预热，或5分钟KDJ J&lt;20）
               {" · "}
-              卖点：涨1% / 死叉 / 涨0.8%且MACDFS即将死叉
+              卖点：涨1% / 死叉 / 涨0.8%且1分MACD即将死叉
             </p>
           )}
           <p className="t0-pair">

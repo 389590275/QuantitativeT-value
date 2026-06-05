@@ -74,8 +74,8 @@ export function TradeList({ data }: Props) {
     ? vwapBias(selectedMark.price, selectedPoint?.vwap)
     : undefined;
   const buyThreshold = data?.vwap_thresholds?.buy_zone_pct;
-  const macdfsDf = selectedPoint?.factors?.macd_fs;
-  const macdfsStatus = selectedPoint?.factor_status?.macd_fs ?? "—";
+  const macdDif = selectedPoint?.factors?.macd_fs;
+  const macdStatus = selectedPoint?.factor_status?.macd_fs ?? "—";
   const kdjJ = selectedPoint?.factors?.kdj_5m;
   const kdjStatus = selectedPoint?.factor_status?.kdj_5m ?? "—";
 
@@ -158,8 +158,8 @@ export function TradeList({ data }: Props) {
             </b>
           </div>
           <div className="trade-detail-row">
-            <span>MACDFS DF</span>
-            <b>{formatNumber(macdfsDf, 4)}（{macdfsStatus}）</b>
+            <span>1分MACD DIF</span>
+            <b>{formatNumber(macdDif, 4)}（{macdStatus}）</b>
           </div>
           <div className="trade-detail-row">
             <span>5分钟KDJ J</span>
