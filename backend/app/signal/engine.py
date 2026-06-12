@@ -20,7 +20,6 @@ class SignalEngine:
     ) -> tuple[SignalOutput, dict[str, float]]:
         t = thresholds or DEFAULT_VWAP_THRESHOLDS
         vwap = factors.get("vwap_bias")
-        kdj5 = factors.get("kdj_5m")
         macd_fs = factors.get("macd_fs")
 
         reasons: list[str] = []
@@ -31,29 +30,20 @@ class SignalEngine:
         if buy_zone:
             reasons.append(f"低于分时均线{abs(vwap_bias):.2f}%")
 
-        kdj_oversold = bool(kdj5 and kdj5.value < 20)
         macd_golden = bool(macd_fs and macd_fs.status == "金叉")
         macd_impending_golden = bool(macd_fs and macd_fs.status == "即将金叉")
         macd_unavailable = bool(macd_fs and macd_fs.status == "未预热")
         macd_dif_low = bool(macd_fs and macd_fs.value < _MACD_BUY_DIF_THRESHOLD)
-        macd_buy_ready = (
-            macd_unavailable or (macd_dif_low and (macd_golden or macd_impending_golden))
-        )
-        kdj_death = bool(kdj5 and kdj5.status in ("死叉", "弱"))
+        macd_buy_ready = macd_unavailable or (macd_dif_low and macd_golden)
         macd_death = bool(macd_fs and macd_fs.status in ("死叉", "弱"))
         macd_turn_down = bool(macd_fs and macd_fs.status == "即将死叉")
-
-        if kdj_oversold:
-            reasons.append(f"5分钟KDJ J<20（J={kdj5.value:.2f}）")
-        elif kdj_death:
-            reasons.append("5分钟KDJ死叉")
 
         if macd_dif_low and macd_golden:
             reasons.append(f"1分MACD DIF<{_MACD_BUY_DIF_THRESHOLD:.2f}且金叉")
         elif macd_dif_low and macd_impending_golden:
-            reasons.append(f"1分MACD DIF<{_MACD_BUY_DIF_THRESHOLD:.2f}且即将金叉")
+            reasons.append("1分MACD即将金叉，等待金叉")
         elif macd_impending_golden:
-            reasons.append("1分MACD即将金叉，等待DIF<-0.07")
+            reasons.append("1分MACD即将金叉，等待DIF<-0.07且金叉")
         elif macd_golden:
             reasons.append("1分MACD金叉，等待DIF<-0.07")
         elif macd_unavailable and buy_zone:
@@ -63,14 +53,9 @@ class SignalEngine:
         elif macd_turn_down:
             reasons.append("1分MACD即将死叉")
 
-        if buy_zone and (macd_buy_ready or kdj_oversold):
+        if buy_zone and macd_buy_ready:
             return (
                 SignalOutput(signal="BUY", reasons=reasons[:5]),
-                {},
-            )
-        if kdj_death:
-            return (
-                SignalOutput(signal="SELL", reasons=reasons[:5]),
                 {},
             )
         if macd_death:
@@ -82,7 +67,7 @@ class SignalEngine:
             return (
                 SignalOutput(
                     signal="WATCH",
-                    reasons=reasons[:5] or ["已低于分时均线，等待1分MACD DIF<-0.07且金叉/即将金叉或5分钟KDJ J<20"],
+                    reasons=reasons[:5] or ["已低于分时均线，等待1分MACD DIF<-0.07且金叉"],
                 ),
                 {},
             )

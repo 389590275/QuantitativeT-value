@@ -9,8 +9,7 @@ from app.models.schemas import SignalOutput
 _LAST_BUY_TIME = time(14, 50)
 _FORCE_CLOSE_TIME = time(14, 54)
 _MARKET_CLOSE_TIME = time(15, 0)
-_TAKE_PROFIT_RATIO = 0.01
-_TURN_DOWN_PROFIT_RATIO = 0.008
+_TAKE_PROFIT_RATIO = 0.02
 
 
 @dataclass
@@ -106,18 +105,11 @@ class T0SignalPairer:
         ):
             buy_price = float(self._pending_buy.get("price", 0) or 0)
             gain_ratio = (price - buy_price) / buy_price if buy_price > 0 else 0.0
-            turn_down = self._has_turn_down(raw)
             if gain_ratio >= _TAKE_PROFIT_RATIO:
                 gain_pct = (price - buy_price) / buy_price * 100
                 raw = SignalOutput(
                     signal="SELL",
-                    reasons=[f"距买点涨幅{gain_pct:.2f}%达到1%止盈"] + raw.reasons[:3],
-                )
-            elif raw.signal != "SELL" and gain_ratio >= _TURN_DOWN_PROFIT_RATIO and turn_down:
-                gain_pct = (price - buy_price) / buy_price * 100
-                raw = SignalOutput(
-                    signal="SELL",
-                    reasons=[f"距买点涨幅{gain_pct:.2f}%且1分MACD即将死叉"] + raw.reasons[:3],
+                    reasons=[f"距买点涨幅{gain_pct:.2f}%达到2%止盈"] + raw.reasons[:3],
                 )
 
         if raw.signal == "BUY" and self._position == "flat" and now.time() >= _LAST_BUY_TIME:
@@ -199,9 +191,3 @@ class T0SignalPairer:
                 return part[:8] if len(part) >= 8 else part[:5] + ":00"
         return now.strftime("%H:%M:%S")
 
-    @staticmethod
-    def _has_turn_down(raw: SignalOutput) -> bool:
-        return any(
-            "拐头向下" in reason or "即将死叉" in reason
-            for reason in raw.reasons
-        )

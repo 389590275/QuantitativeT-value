@@ -14,6 +14,7 @@ from app.models.database import (
     init_db,
     insert_signal,
     insert_tick,
+    mark_signal_notified,
 )
 from app.models.schemas import MarketData, RealtimePayload, SignalOutput, VwapThresholdsInfo
 from app.signal.vwap_thresholds import DEFAULT_VWAP_THRESHOLDS, resolve_vwap_thresholds
@@ -124,6 +125,7 @@ class TradingEngine:
             "未获取到该交易日分钟数据，未计算买卖点",
         )
         await self._broadcast(self._latest)
+        await self._notify_pending_buy_if_needed()
         return {
             "symbol": self.symbol,
             "trade_date": self.trade_date,
@@ -145,6 +147,7 @@ class TradingEngine:
             "刷新行情缓存失败，未计算买卖点",
         )
         await self._broadcast(self._latest)
+        await self._notify_pending_buy_if_needed()
         return {
             "symbol": self.symbol,
             "trade_date": self.trade_date,
@@ -292,7 +295,7 @@ class TradingEngine:
 
             if persist:
                 for persisted in decision.persist_signals or []:
-                    self._persist_signal(
+                    persisted["id"] = self._persist_signal(
                         replay_md,
                         SignalOutput(
                             signal=str(persisted["signal"]),
@@ -485,8 +488,9 @@ class TradingEngine:
             minute_points[-1].update(self._factor_snapshots.get(latest_point_time, {}))
 
         has_notification = decision.notify_signal is not None
+        notification_signal_id: int | None = None
         for persisted in decision.persist_signals or []:
-            self._persist_signal(
+            persisted["id"] = self._persist_signal(
                 md,
                 SignalOutput(
                     signal=str(persisted["signal"]),
@@ -494,6 +498,8 @@ class TradingEngine:
                 ),
                 price=float(persisted.get("price", md.price)),
             )
+            if decision.notify_signal and persisted.get("signal") == decision.notify_signal.signal:
+                notification_signal_id = int(persisted["id"])
 
         if has_notification and decision.notify_signal:
             send_desktop_notification(
@@ -527,10 +533,21 @@ class TradingEngine:
         )
         self._latest = payload
 
+        notification_payload = self._pending_buy_notification_payload(payload)
+        if not has_notification and notification_payload is not None:
+            has_notification = True
+            notification_signal_id = self._pending_buy_signal_id()
+
         insert_tick(md.symbol, md.price, md.volume)
 
         asyncio.run_coroutine_threadsafe(
-            self._post_tick(payload, has_notification), self._loop
+            self._post_tick(
+                payload,
+                has_notification,
+                notification_signal_id,
+                notification_payload,
+            ),
+            self._loop,
         )
 
     def _publish_loading_payload_locked(self, reason: str) -> None:
@@ -599,8 +616,8 @@ class TradingEngine:
             "非交易时段未获取到最近可用分钟数据",
         )
 
-    def _persist_signal(self, md, signal: SignalOutput, price: float | None = None) -> None:
-        insert_signal(
+    def _persist_signal(self, md, signal: SignalOutput, price: float | None = None) -> int:
+        return insert_signal(
             md.symbol,
             signal.signal,
             0.0,
@@ -698,10 +715,70 @@ class TradingEngine:
             pass
         return fallback
 
-    async def _post_tick(self, payload: RealtimePayload, is_new_signal: bool) -> None:
+    def _pending_buy_signal_id(self) -> int | None:
+        pending = self.t0_pairer.pending_buy
+        if not pending:
+            return None
+        try:
+            return int(pending.get("id", 0) or 0) or None
+        except (TypeError, ValueError):
+            return None
+
+    def _pending_buy_notification_payload(
+        self, payload: RealtimePayload
+    ) -> RealtimePayload | None:
+        if payload.trade_date != self._today():
+            return None
+        pending = self.t0_pairer.pending_buy
+        if not pending or pending.get("notified"):
+            return None
+        signal_id = self._pending_buy_signal_id()
+        if signal_id is None:
+            return None
+        reason = str(pending.get("reason") or "待卖出买点")
+        price = float(pending.get("price", payload.price) or payload.price)
+        quote_time = str(pending.get("time") or payload.quote_time)
+        return payload.model_copy(
+            update={
+                "signal": "BUY",
+                "reasons": [reason],
+                "price": price,
+                "quote_time": quote_time,
+            }
+        )
+
+    async def _notify_pending_buy_if_needed(self) -> None:
+        if self._latest is None:
+            return
+        payload = self._pending_buy_notification_payload(self._latest)
+        signal_id = self._pending_buy_signal_id()
+        if payload is None or signal_id is None:
+            return
+        ok = await self._notify_wecom(payload)
+        if ok:
+            mark_signal_notified(signal_id)
+            if self.t0_pairer._pending_buy is not None:
+                self.t0_pairer._pending_buy["notified"] = True
+
+    async def _post_tick(
+        self,
+        payload: RealtimePayload,
+        is_new_signal: bool,
+        signal_id: int | None = None,
+        notification_payload: RealtimePayload | None = None,
+    ) -> None:
         await self._broadcast(payload)
-        if is_new_signal and payload.signal in ("BUY", "SELL"):
-            await self._notify_wecom(payload)
+        target_payload = notification_payload or payload
+        if is_new_signal and target_payload.signal in ("BUY", "SELL"):
+            ok = await self._notify_wecom(target_payload)
+            if ok and signal_id is not None:
+                mark_signal_notified(signal_id)
+                if (
+                    target_payload.signal == "BUY"
+                    and self.t0_pairer._pending_buy is not None
+                    and self.t0_pairer._pending_buy.get("id") == signal_id
+                ):
+                    self.t0_pairer._pending_buy["notified"] = True
 
     async def _broadcast(self, payload: RealtimePayload) -> None:
         data = payload.model_dump(mode="json")
@@ -718,7 +795,7 @@ class TradingEngine:
         for q in dead:
             self.unsubscribe(q)
 
-    async def _notify_wecom(self, payload: RealtimePayload) -> None:
+    async def _notify_wecom(self, payload: RealtimePayload) -> bool:
         price_change = self._format_change_pct(payload.price, payload.prev_close)
         vwap_bias = self._format_vwap_bias(payload.price, payload.vwap)
         buy_threshold = payload.vwap_thresholds.buy_zone_pct
@@ -736,7 +813,7 @@ class TradingEngine:
             f"**5分钟KDJ J**: {self._format_optional_float(kdj_j, 2)} ({kdj_status})\n"
             f"**原因**: {', '.join(payload.reasons)}"
         )
-        await send_wecom("T0 交易信号", content)
+        return await send_wecom("T0 交易信号", content)
 
     @staticmethod
     def _format_optional_float(value: float | None, digits: int) -> str:

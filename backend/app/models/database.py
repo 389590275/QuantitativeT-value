@@ -19,6 +19,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             signal TEXT NOT NULL,
             score REAL NOT NULL,
             price REAL NOT NULL,
+            notified INTEGER NOT NULL DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS ticks (
@@ -37,6 +38,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(signals)").fetchall()
+    }
+    if "notified" not in columns:
+        conn.execute("ALTER TABLE signals ADD COLUMN notified INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -62,13 +69,21 @@ def insert_signal(
     score: float,
     price: float,
     created_at: datetime | str | None = None,
-) -> None:
+    notified: bool = False,
+) -> int:
     ts = _iso_datetime(created_at)
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO signals (symbol, signal, score, price, created_at) VALUES (?, ?, ?, ?, ?)",
-            (symbol, signal, score, price, ts),
+        cursor = conn.execute(
+            "INSERT INTO signals (symbol, signal, score, price, notified, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, signal, score, price, 1 if notified else 0, ts),
         )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def mark_signal_notified(signal_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE signals SET notified = 1 WHERE id = ?", (signal_id,))
         conn.commit()
 
 
@@ -81,7 +96,7 @@ def get_signal_marks(symbol: str, trade_date: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT signal, price, score, created_at FROM signals
+            SELECT id, signal, price, score, notified, created_at FROM signals
             WHERE symbol = ? AND signal IN ('BUY', 'SELL')
               AND date(created_at) = date(?)
             ORDER BY created_at ASC
@@ -95,9 +110,11 @@ def get_signal_marks(symbol: str, trade_date: str) -> list[dict]:
         marks.append(
             {
                 "time": time_part,
+                "id": int(r["id"]),
                 "signal": r["signal"],
                 "price": float(r["price"]),
                 "score": float(r["score"]),
+                "notified": bool(r["notified"]),
             }
         )
     return marks
