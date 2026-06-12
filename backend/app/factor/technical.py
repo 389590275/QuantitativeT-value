@@ -160,6 +160,7 @@ class Kdj5mFactor(BaseFactor):
 class MacdFastSlowFactor(BaseFactor):
     name = "MACD快慢线差"
     key = "macd_fs"
+    buy_dif_threshold = -0.07
 
     def calculate(self, market_data: MarketData) -> FactorResult:
         today_closes = [
@@ -190,34 +191,46 @@ class MacdFastSlowFactor(BaseFactor):
 
         golden_cross = prev_dif <= prev_dea and dif > dea
         death_cross = prev_dif >= prev_dea and dif < dea
-        prev2_golden_gap = prev2_dea - prev2_dif
-        prev_golden_gap = prev_dea - prev_dif
-        golden_gap = dea - dif
-        impending_golden_cross = (
-            dif < dea
-            and prev_dif < prev_dea
-            and prev2_dif < prev2_dea
-            and 0 < golden_gap < prev_golden_gap < prev2_golden_gap
-        )
-        prev2_death_gap = prev2_dif - prev2_dea
-        prev_death_gap = prev_dif - prev_dea
-        death_gap = dif - dea
-        impending_death_cross = (
-            dif > dea
-            and prev_dif > prev_dea
-            and prev2_dif > prev2_dea
-            and 0 < death_gap < prev_death_gap < prev2_death_gap
-        )
 
         if golden_cross:
-            status = "金叉"
+            if dif < self.buy_dif_threshold:
+                status = self._golden_cross_volume_status(market_data.minute_bars)
+            else:
+                status = "金叉"
         elif death_cross and dif > 0:
             status = "死叉"
-        elif impending_golden_cross:
-            status = "即将金叉"
-        elif impending_death_cross and dif > 0:
-            status = "即将死叉"
         else:
             status = "中性"
 
         return FactorResult(name=self.name, value=round(dif, 4), status=status)
+
+    def _golden_cross_volume_status(self, minute_bars: list[dict]) -> str:
+        if len(minute_bars) < 6:
+            return "金叉量能未预热"
+
+        cur_bar = minute_bars[-1]
+        current_volume = _to_float(cur_bar.get("volume"))
+        prev_volumes = [
+            _to_float(b.get("volume"))
+            for b in minute_bars[-6:-1]
+        ]
+        if current_volume <= 0 or len(prev_volumes) < 5 or any(v <= 0 for v in prev_volumes):
+            return "金叉量能不足"
+
+        prev5_avg = sum(prev_volumes) / len(prev_volumes)
+        multiplier = self._volume_multiplier(str(cur_bar.get("time", "")))
+        prev_volume = prev_volumes[-1]
+        volume_breakout = current_volume > multiplier * prev5_avg
+        previous_shrink = prev_volume < 0.8 * prev5_avg
+        if volume_breakout and previous_shrink:
+            return "金叉放量"
+        if not volume_breakout:
+            return "金叉量能不足"
+        return "金叉前未缩量"
+
+    @staticmethod
+    def _volume_multiplier(time_str: str) -> float:
+        total_min = _bar_clock_minutes(time_str)
+        if total_min is not None and total_min >= 13 * 60:
+            return 1.2
+        return 1.5

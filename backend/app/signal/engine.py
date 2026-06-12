@@ -4,9 +4,6 @@ from app.models.schemas import FactorResult, SignalOutput, VwapThresholdsInfo
 from app.signal.vwap_thresholds import DEFAULT_VWAP_THRESHOLDS
 
 
-_MACD_BUY_DIF_THRESHOLD = -0.07
-
-
 class SignalEngine:
     def evaluate(self, factors: dict[str, FactorResult], price: float) -> SignalOutput:
         signal, _meta = self.evaluate_with_meta(factors, price)
@@ -30,28 +27,29 @@ class SignalEngine:
         if buy_zone:
             reasons.append(f"低于分时均线{abs(vwap_bias):.2f}%")
 
+        macd_volume_golden = bool(macd_fs and macd_fs.status == "金叉放量")
         macd_golden = bool(macd_fs and macd_fs.status == "金叉")
-        macd_impending_golden = bool(macd_fs and macd_fs.status == "即将金叉")
         macd_unavailable = bool(macd_fs and macd_fs.status == "未预热")
-        macd_dif_low = bool(macd_fs and macd_fs.value < _MACD_BUY_DIF_THRESHOLD)
-        macd_buy_ready = macd_unavailable or (macd_dif_low and macd_golden)
+        macd_volume_not_ready = bool(macd_fs and macd_fs.status == "金叉量能未预热")
+        macd_volume_weak = bool(macd_fs and macd_fs.status == "金叉量能不足")
+        macd_prev_not_shrink = bool(macd_fs and macd_fs.status == "金叉前未缩量")
+        macd_buy_ready = macd_volume_golden
         macd_death = bool(macd_fs and macd_fs.status in ("死叉", "弱"))
-        macd_turn_down = bool(macd_fs and macd_fs.status == "即将死叉")
 
-        if macd_dif_low and macd_golden:
-            reasons.append(f"1分MACD DIF<{_MACD_BUY_DIF_THRESHOLD:.2f}且金叉")
-        elif macd_dif_low and macd_impending_golden:
-            reasons.append("1分MACD即将金叉，等待金叉")
-        elif macd_impending_golden:
-            reasons.append("1分MACD即将金叉，等待DIF<-0.07且金叉")
+        if macd_volume_golden:
+            reasons.append("1分MACD DIF<-0.07且放量金叉")
+        elif macd_volume_not_ready:
+            reasons.append("1分MACD金叉，等待5分钟量能均线")
+        elif macd_volume_weak:
+            reasons.append("1分MACD金叉，成交量未放大")
+        elif macd_prev_not_shrink:
+            reasons.append("1分MACD金叉，金叉前一根未缩量")
         elif macd_golden:
             reasons.append("1分MACD金叉，等待DIF<-0.07")
         elif macd_unavailable and buy_zone:
-            reasons.append("1分MACD未预热，忽略MACD条件")
+            reasons.append("1分MACD未预热，等待金叉")
         elif macd_death:
             reasons.append("1分MACD死叉")
-        elif macd_turn_down:
-            reasons.append("1分MACD即将死叉")
 
         if buy_zone and macd_buy_ready:
             return (
@@ -67,13 +65,8 @@ class SignalEngine:
             return (
                 SignalOutput(
                     signal="WATCH",
-                    reasons=reasons[:5] or ["已低于分时均线，等待1分MACD DIF<-0.07且金叉"],
+                    reasons=reasons[:5] or ["已低于分时均线，等待1分MACD DIF<-0.07且放量金叉"],
                 ),
-                {},
-            )
-        if macd_turn_down:
-            return (
-                SignalOutput(signal="WATCH", reasons=reasons[:5]),
                 {},
             )
         return (

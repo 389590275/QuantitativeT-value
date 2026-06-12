@@ -203,7 +203,7 @@ export default function App() {
               {displayData.vwap_thresholds.buy_zone_pct.toFixed(2)}%
               （固定阈值）
               {" · "}
-              且（1分MACD DIF&lt;-0.07且金叉，或MACD未预热）
+              且（1分MACD DIF&lt;-0.07且金叉、当前量&gt;过去5分钟均量的1.5倍(早盘)/1.2倍(下午)、前一根量&lt;均量80%）
               {" · "}
               卖点：距买点涨幅≥2% / 1分MACD死叉
             </p>
